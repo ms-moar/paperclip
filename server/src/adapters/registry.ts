@@ -102,6 +102,7 @@ import {
   models as openCodeModels,
   modelProfiles as openCodeModelProfiles,
 } from "@paperclipai/adapter-opencode-local";
+
 import {
   execute as openclawGatewayExecute,
   testEnvironment as openclawGatewayTestEnvironment,
@@ -136,6 +137,15 @@ import {
   agentConfigurationDoc as hermesAgentConfigurationDoc,
   models as hermesModels,
 } from "hermes-paperclip-adapter";
+import {
+  execute as glmExecute,
+  testEnvironment as glmTestEnvironment,
+  sessionCodec as glmSessionCodec,
+} from "@paperclipai/adapter-glm-local/server";
+import {
+  agentConfigurationDoc as glmAgentConfigurationDoc,
+  models as glmModels,
+} from "@paperclipai/adapter-glm-local";
 import { BUILTIN_ADAPTER_TYPES } from "./builtin-adapter-types.js";
 import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
@@ -497,6 +507,17 @@ const hermesLocalAdapter: ServerAdapterModule = {
   detectModel: () => detectModelFromHermes(),
 };
 
+const glmLocalAdapter: ServerAdapterModule = {
+  type: "glm_local",
+  execute: glmExecute,
+  testEnvironment: glmTestEnvironment,
+  sessionCodec: glmSessionCodec,
+  models: glmModels,
+  supportsLocalAgentJwt: true,
+  agentConfigurationDoc: glmAgentConfigurationDoc,
+
+};
+
 const adaptersByType = new Map<string, ServerAdapterModule>();
 
 // For builtin types that are overridden by an external adapter, we keep the
@@ -521,6 +542,8 @@ function registerBuiltInAdapters() {
     grokLocalAdapter,
     openclawGatewayAdapter,
     hermesLocalAdapter,
+    glmLocalAdapter,
+
     processAdapter,
     httpAdapter,
   ]) {
