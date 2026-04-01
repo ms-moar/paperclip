@@ -5,7 +5,7 @@ import { buildClaudeLocalConfig } from "@paperclipai/adapter-claude-local/ui";
 
 export const glmLocalUIAdapter: UIAdapterModule = {
   type: "glm_local",
-  label: "GLM CLI (local)",
+  label: "Claude GLM (local)",
   parseStdoutLine: parseClaudeStdoutLine,
   ConfigFields: ClaudeLocalConfigFields,
   buildAdapterConfig: buildClaudeLocalConfig,
