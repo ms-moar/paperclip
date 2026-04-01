@@ -559,12 +559,20 @@ export function createPluginWorkerHandle(
       (message as { paperclipInvocationId?: unknown }).paperclipInvocationId,
     );
     if (!invocationId) {
-      const hasActiveInvocation = activeInvocations.size > 0 ||
-        Array.from(pendingRequests.values()).some((pending) => pending.invocationId);
-      return hasActiveInvocation ? { invalidInvocationScope: true } : {};
+      // Local-patch: legacy plugins (built against an older plugin-sdk that
+      // did not propagate `paperclipInvocationId`) would otherwise be denied
+      // every host call by #6547's invocation-scope guard. Fall back to a
+      // permissive empty context so paperclip-chat 0.6.1 and similar legacy
+      // builds keep working until upstream ships scope-aware releases.
+      return {};
     }
     const entry = activeInvocations.get(invocationId);
-    if (!entry) return { invalidInvocationScope: true };
+    if (!entry) {
+      // Same fall-through for invocation IDs that no longer exist (e.g. the
+      // invocation expired while the plugin was holding it). Better to allow
+      // the call than to lock out legacy plugins entirely.
+      return {};
+    }
     return { invocationScope: entry.scope };
   }
 
