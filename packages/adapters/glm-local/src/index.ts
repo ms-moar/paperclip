@@ -1,5 +1,5 @@
 export const type = "glm_local";
-export const label = "GLM CLI (local)";
+export const label = "Claude GLM (local)";
 
 export const models = [
   { id: "glm-5", label: "GLM-5" },
