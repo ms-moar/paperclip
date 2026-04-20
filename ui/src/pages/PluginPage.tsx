@@ -19,7 +19,11 @@ import { NotFoundPage } from "./NotFound";
  * @see doc/plugins/PLUGIN_SPEC.md §24.4 — Company-Context Plugin Page
  */
 export function PluginPage() {
-  const { companyPrefix: routeCompanyPrefix, pluginId, pluginRoutePath } = useParams<{
+  const {
+    companyPrefix: routeCompanyPrefix,
+    pluginId,
+    pluginRoutePath,
+  } = useParams<{
     companyPrefix?: string;
     pluginId?: string;
     pluginRoutePath?: string;
@@ -29,7 +33,9 @@ export function PluginPage() {
   const routeCompany = useMemo(() => {
     if (!routeCompanyPrefix) return null;
     const requested = routeCompanyPrefix.toUpperCase();
-    return companies.find((c) => c.issuePrefix.toUpperCase() === requested) ?? null;
+    return (
+      companies.find((c) => c.issuePrefix.toUpperCase() === requested) ?? null
+    );
   }, [companies, routeCompanyPrefix]);
   const hasInvalidCompanyPrefix = Boolean(routeCompanyPrefix) && !routeCompany;
 
@@ -40,7 +46,11 @@ export function PluginPage() {
   }, [routeCompany, routeCompanyPrefix, selectedCompanyId]);
 
   const companyPrefix = useMemo(
-    () => (resolvedCompanyId ? companies.find((c) => c.id === resolvedCompanyId)?.issuePrefix ?? null : null),
+    () =>
+      resolvedCompanyId
+        ? (companies.find((c) => c.id === resolvedCompanyId)?.issuePrefix ??
+          null)
+        : null,
     [companies, resolvedCompanyId],
   );
 
@@ -53,7 +63,9 @@ export function PluginPage() {
   const pageSlot = useMemo(() => {
     if (!contributions) return null;
     if (pluginId) {
-      const contribution = contributions.find((c) => c.pluginId === pluginId);
+      const contribution = contributions.find(
+        (c) => c.pluginId === pluginId || c.pluginKey === pluginId,
+      );
       if (!contribution) return null;
       const slot = contribution.slots.find((s) => s.type === "page");
       if (!slot) return null;
@@ -67,15 +79,19 @@ export function PluginPage() {
     }
     if (!pluginRoutePath) return null;
     const matches = contributions.flatMap((contribution) => {
-      const slot = contribution.slots.find((entry) => entry.type === "page" && entry.routePath === pluginRoutePath);
+      const slot = contribution.slots.find(
+        (entry) => entry.type === "page" && entry.routePath === pluginRoutePath,
+      );
       if (!slot) return [];
-      return [{
-        ...slot,
-        pluginId: contribution.pluginId,
-        pluginKey: contribution.pluginKey,
-        pluginDisplayName: contribution.displayName,
-        pluginVersion: contribution.version,
-      }];
+      return [
+        {
+          ...slot,
+          pluginId: contribution.pluginId,
+          pluginKey: contribution.pluginKey,
+          pluginDisplayName: contribution.displayName,
+          pluginVersion: contribution.version,
+        },
+      ];
     });
     if (matches.length !== 1) return null;
     return matches[0] ?? null;
@@ -100,11 +116,18 @@ export function PluginPage() {
 
   if (!resolvedCompanyId) {
     if (hasInvalidCompanyPrefix) {
-      return <NotFoundPage scope="invalid_company_prefix" requestedPrefix={routeCompanyPrefix} />;
+      return (
+        <NotFoundPage
+          scope="invalid_company_prefix"
+          requestedPrefix={routeCompanyPrefix}
+        />
+      );
     }
     return (
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">Select a company to view this page.</p>
+        <p className="text-sm text-muted-foreground">
+          Select a company to view this page.
+        </p>
       </div>
     );
   }
@@ -115,12 +138,15 @@ export function PluginPage() {
 
   if (!pluginId && pluginRoutePath) {
     const duplicateMatches = contributions.filter((contribution) =>
-      contribution.slots.some((slot) => slot.type === "page" && slot.routePath === pluginRoutePath),
+      contribution.slots.some(
+        (slot) => slot.type === "page" && slot.routePath === pluginRoutePath,
+      ),
     );
     if (duplicateMatches.length > 1) {
       return (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          Multiple plugins declare the route <code>{pluginRoutePath}</code>. Use the plugin-id route until the conflict is resolved.
+          Multiple plugins declare the route <code>{pluginRoutePath}</code>. Use
+          the plugin-id route until the conflict is resolved.
         </div>
       );
     }
@@ -131,7 +157,9 @@ export function PluginPage() {
       return <NotFoundPage scope="board" />;
     }
     // No page slot: redirect to plugin settings where plugin info is always shown
-    const settingsPath = pluginId ? `/instance/settings/plugins/${pluginId}` : "/instance/settings/plugins";
+    const settingsPath = pluginId
+      ? `/instance/settings/plugins/${pluginId}`
+      : "/instance/settings/plugins";
     return <Navigate to={settingsPath} replace />;
   }
 
@@ -139,7 +167,9 @@ export function PluginPage() {
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="sm" asChild>
-          <Link to={companyPrefix ? `/${companyPrefix}/dashboard` : "/dashboard"}>
+          <Link
+            to={companyPrefix ? `/${companyPrefix}/dashboard` : "/dashboard"}
+          >
             <ArrowLeft className="h-4 w-4 mr-1" />
             Back
           </Link>

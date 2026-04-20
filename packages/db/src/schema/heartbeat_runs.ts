@@ -1,4 +1,15 @@
-import { type AnyPgColumn, pgTable, uuid, text, timestamp, jsonb, index, integer, bigint, boolean } from "drizzle-orm/pg-core";
+import {
+  type AnyPgColumn,
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  jsonb,
+  index,
+  integer,
+  bigint,
+  boolean,
+} from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 import { agentWakeupRequests } from "./agent_wakeup_requests.js";
@@ -7,15 +18,21 @@ export const heartbeatRuns = pgTable(
   "heartbeat_runs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    agentId: uuid("agent_id").notNull().references(() => agents.id),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id),
     invocationSource: text("invocation_source").notNull().default("on_demand"),
     triggerDetail: text("trigger_detail"),
     status: text("status").notNull().default("queued"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     error: text("error"),
-    wakeupRequestId: uuid("wakeup_request_id").references(() => agentWakeupRequests.id),
+    wakeupRequestId: uuid("wakeup_request_id").references(
+      () => agentWakeupRequests.id,
+    ),
     exitCode: integer("exit_code"),
     signal: text("signal"),
     usageJson: jsonb("usage_json").$type<Record<string, unknown>>(),
@@ -34,22 +51,37 @@ export const heartbeatRuns = pgTable(
     processPid: integer("process_pid"),
     processGroupId: integer("process_group_id"),
     processStartedAt: timestamp("process_started_at", { withTimezone: true }),
-    retryOfRunId: uuid("retry_of_run_id").references((): AnyPgColumn => heartbeatRuns.id, {
-      onDelete: "set null",
+    retryOfRunId: uuid("retry_of_run_id").references(
+      (): AnyPgColumn => heartbeatRuns.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    processLossRetryCount: integer("process_loss_retry_count")
+      .notNull()
+      .default(0),
+    adapterRetryCount: integer("adapter_retry_count").notNull().default(0),
+    notBefore: timestamp("not_before", { withTimezone: true }),
+    issueCommentStatus: text("issue_comment_status")
+      .notNull()
+      .default("not_applicable"),
+    issueCommentSatisfiedByCommentId: uuid(
+      "issue_comment_satisfied_by_comment_id",
+    ),
+    issueCommentRetryQueuedAt: timestamp("issue_comment_retry_queued_at", {
+      withTimezone: true,
     }),
-    processLossRetryCount: integer("process_loss_retry_count").notNull().default(0),
-    issueCommentStatus: text("issue_comment_status").notNull().default("not_applicable"),
-    issueCommentSatisfiedByCommentId: uuid("issue_comment_satisfied_by_comment_id"),
-    issueCommentRetryQueuedAt: timestamp("issue_comment_retry_queued_at", { withTimezone: true }),
     contextSnapshot: jsonb("context_snapshot").$type<Record<string, unknown>>(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (table) => ({
-    companyAgentStartedIdx: index("heartbeat_runs_company_agent_started_idx").on(
-      table.companyId,
-      table.agentId,
-      table.startedAt,
-    ),
+    companyAgentStartedIdx: index(
+      "heartbeat_runs_company_agent_started_idx",
+    ).on(table.companyId, table.agentId, table.startedAt),
   }),
 );

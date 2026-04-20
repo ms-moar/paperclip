@@ -38,7 +38,10 @@ import {
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
-import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
+import {
+  getBoardClaimWarningUrl,
+  initializeBoardClaimChallenge,
+} from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
 
@@ -70,7 +73,6 @@ type EmbeddedPostgresCtor = new (opts: {
   onError?: (message: unknown) => void;
 }) => EmbeddedPostgresInstance;
 
-
 export interface StartedServer {
   server: ReturnType<typeof createServer>;
   host: string;
@@ -86,45 +88,52 @@ export async function startServer(): Promise<StartedServer> {
     process.env.PAPERCLIP_SECRETS_PROVIDER = config.secretsProvider;
   }
   if (process.env.PAPERCLIP_SECRETS_STRICT_MODE === undefined) {
-    process.env.PAPERCLIP_SECRETS_STRICT_MODE = config.secretsStrictMode ? "true" : "false";
+    process.env.PAPERCLIP_SECRETS_STRICT_MODE = config.secretsStrictMode
+      ? "true"
+      : "false";
   }
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
-    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE =
+      config.secretsMasterKeyFilePath;
   }
-  
+
   type MigrationSummary =
     | "skipped"
     | "already applied"
     | "applied (empty database)"
     | "applied (pending migrations)";
-  
+
   function formatPendingMigrationSummary(migrations: string[]): string {
     if (migrations.length === 0) return "none";
     return migrations.length > 3
       ? `${migrations.slice(0, 3).join(", ")} (+${migrations.length - 3} more)`
       : migrations.join(", ");
   }
-  
+
   async function promptApplyMigrations(migrations: string[]): Promise<boolean> {
     if (process.env.PAPERCLIP_MIGRATION_AUTO_APPLY === "true") return true;
     if (process.env.PAPERCLIP_MIGRATION_PROMPT === "never") return false;
     if (!stdin.isTTY || !stdout.isTTY) return true;
-  
+
     const prompt = createInterface({ input: stdin, output: stdout });
     try {
-      const answer = (await prompt.question(
-        `Apply pending migrations (${formatPendingMigrationSummary(migrations)}) now? (y/N): `,
-      )).trim().toLowerCase();
+      const answer = (
+        await prompt.question(
+          `Apply pending migrations (${formatPendingMigrationSummary(migrations)}) now? (y/N): `,
+        )
+      )
+        .trim()
+        .toLowerCase();
       return answer === "y" || answer === "yes";
     } finally {
       prompt.close();
     }
   }
-  
+
   type EnsureMigrationsOptions = {
     autoApply?: boolean;
   };
-  
+
   async function ensureMigrations(
     connectionString: string,
     label: string,
@@ -132,7 +141,10 @@ export async function startServer(): Promise<StartedServer> {
   ): Promise<MigrationSummary> {
     const autoApply = opts?.autoApply === true;
     let state = await inspectMigrations(connectionString);
-    if (state.status === "needsMigrations" && state.reason === "pending-migrations") {
+    if (
+      state.status === "needsMigrations" &&
+      state.reason === "pending-migrations"
+    ) {
       const repair = await reconcilePendingMigrationHistory(connectionString);
       if (repair.repairedMigrations.length > 0) {
         logger.warn(
@@ -144,43 +156,63 @@ export async function startServer(): Promise<StartedServer> {
       }
     }
     if (state.status === "upToDate") return "already applied";
-    if (state.status === "needsMigrations" && state.reason === "no-migration-journal-non-empty-db") {
+    if (
+      state.status === "needsMigrations" &&
+      state.reason === "no-migration-journal-non-empty-db"
+    ) {
       logger.warn(
         { tableCount: state.tableCount },
         `${label} has existing tables but no migration journal. Run migrations manually to sync schema.`,
       );
-      const apply = autoApply ? true : await promptApplyMigrations(state.pendingMigrations);
+      const apply = autoApply
+        ? true
+        : await promptApplyMigrations(state.pendingMigrations);
       if (!apply) {
         throw new Error(
           `${label} has pending migrations (${formatPendingMigrationSummary(state.pendingMigrations)}). ` +
             "Refusing to start against a stale schema. Run pnpm db:migrate or set PAPERCLIP_MIGRATION_AUTO_APPLY=true.",
         );
       }
-  
-      logger.info({ pendingMigrations: state.pendingMigrations }, `Applying ${state.pendingMigrations.length} pending migrations for ${label}`);
+
+      logger.info(
+        { pendingMigrations: state.pendingMigrations },
+        `Applying ${state.pendingMigrations.length} pending migrations for ${label}`,
+      );
       await applyPendingMigrations(connectionString);
       return "applied (pending migrations)";
     }
-  
-    const apply = autoApply ? true : await promptApplyMigrations(state.pendingMigrations);
+
+    const apply = autoApply
+      ? true
+      : await promptApplyMigrations(state.pendingMigrations);
     if (!apply) {
       throw new Error(
         `${label} has pending migrations (${formatPendingMigrationSummary(state.pendingMigrations)}). ` +
           "Refusing to start against a stale schema. Run pnpm db:migrate or set PAPERCLIP_MIGRATION_AUTO_APPLY=true.",
       );
     }
-  
-    logger.info({ pendingMigrations: state.pendingMigrations }, `Applying ${state.pendingMigrations.length} pending migrations for ${label}`);
+
+    logger.info(
+      { pendingMigrations: state.pendingMigrations },
+      `Applying ${state.pendingMigrations.length} pending migrations for ${label}`,
+    );
     await applyPendingMigrations(connectionString);
     return "applied (pending migrations)";
   }
-  
+
   function isLoopbackHost(host: string): boolean {
     const normalized = host.trim().toLowerCase();
-    return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
+    return (
+      normalized === "127.0.0.1" ||
+      normalized === "localhost" ||
+      normalized === "::1"
+    );
   }
 
-  function rewriteLocalUrlPort(rawUrl: string | undefined, port: number): string | undefined {
+  function rewriteLocalUrlPort(
+    rawUrl: string | undefined,
+    port: number,
+  ): string | undefined {
     if (!rawUrl) return undefined;
     try {
       const parsed = new URL(rawUrl);
@@ -191,11 +223,11 @@ export async function startServer(): Promise<StartedServer> {
       return rawUrl;
     }
   }
-  
+
   const LOCAL_BOARD_USER_ID = "local-board";
   const LOCAL_BOARD_USER_EMAIL = "local@paperclip.local";
   const LOCAL_BOARD_USER_NAME = "Board";
-  
+
   async function ensureLocalTrustedBoardPrincipal(db: any): Promise<void> {
     const now = new Date();
     const existingUser = await db
@@ -203,7 +235,7 @@ export async function startServer(): Promise<StartedServer> {
       .from(authUsers)
       .where(eq(authUsers.id, LOCAL_BOARD_USER_ID))
       .then((rows: Array<{ id: string }>) => rows[0] ?? null);
-  
+
     if (!existingUser) {
       await db.insert(authUsers).values({
         id: LOCAL_BOARD_USER_ID,
@@ -215,11 +247,16 @@ export async function startServer(): Promise<StartedServer> {
         updatedAt: now,
       });
     }
-  
+
     const role = await db
       .select({ id: instanceUserRoles.id })
       .from(instanceUserRoles)
-      .where(and(eq(instanceUserRoles.userId, LOCAL_BOARD_USER_ID), eq(instanceUserRoles.role, "instance_admin")))
+      .where(
+        and(
+          eq(instanceUserRoles.userId, LOCAL_BOARD_USER_ID),
+          eq(instanceUserRoles.role, "instance_admin"),
+        ),
+      )
       .then((rows: Array<{ id: string }>) => rows[0] ?? null);
     if (!role) {
       await db.insert(instanceUserRoles).values({
@@ -227,7 +264,7 @@ export async function startServer(): Promise<StartedServer> {
         role: "instance_admin",
       });
     }
-  
+
     const companyRows = await db.select({ id: companies.id }).from(companies);
     for (const company of companyRows) {
       const membership = await db
@@ -251,7 +288,7 @@ export async function startServer(): Promise<StartedServer> {
       });
     }
   }
-  
+
   let db;
   let embeddedPostgres: EmbeddedPostgresInstance | null = null;
   let embeddedPostgresStartedByThisProcess = false;
@@ -263,11 +300,14 @@ export async function startServer(): Promise<StartedServer> {
     | { mode: "embedded-postgres"; dataDir: string; port: number };
   if (config.databaseUrl) {
     migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
-  
+
     db = createDb(config.databaseUrl);
     logger.info("Using external PostgreSQL via DATABASE_URL/config");
     activeDatabaseConnectionString = config.databaseUrl;
-    startupDbInfo = { mode: "external-postgres", connectionString: config.databaseUrl };
+    startupDbInfo = {
+      mode: "external-postgres",
+      connectionString: config.databaseUrl,
+    };
   } else {
     const moduleName = "embedded-postgres";
     let EmbeddedPostgres: EmbeddedPostgresCtor;
@@ -279,29 +319,34 @@ export async function startServer(): Promise<StartedServer> {
         "Embedded PostgreSQL mode requires dependency `embedded-postgres`. Reinstall dependencies (without omitting required packages), or set DATABASE_URL for external Postgres.",
       );
     }
-  
+
     const dataDir = resolve(config.embeddedPostgresDataDir);
     const configuredPort = config.embeddedPostgresPort;
     let port = configuredPort;
     const logBuffer = createEmbeddedPostgresLogBuffer(120);
-    const verboseEmbeddedPostgresLogs = process.env.PAPERCLIP_EMBEDDED_POSTGRES_VERBOSE === "true";
+    const verboseEmbeddedPostgresLogs =
+      process.env.PAPERCLIP_EMBEDDED_POSTGRES_VERBOSE === "true";
     const appendEmbeddedPostgresLog = (message: unknown) => {
       logBuffer.append(message);
       if (!verboseEmbeddedPostgresLogs) {
         return;
       }
-      const lines = typeof message === "string"
-        ? message.split(/\r?\n/)
-        : message instanceof Error
-          ? [message.message]
-          : [String(message ?? "")];
+      const lines =
+        typeof message === "string"
+          ? message.split(/\r?\n/)
+          : message instanceof Error
+            ? [message.message]
+            : [String(message ?? "")];
       for (const lineRaw of lines) {
         const line = lineRaw.trim();
         if (!line) continue;
         logger.info({ embeddedPostgresLog: line }, "embedded-postgres");
       }
     };
-    const logEmbeddedPostgresFailure = (phase: "initialise" | "start", err: unknown) => {
+    const logEmbeddedPostgresFailure = (
+      phase: "initialise" | "start",
+      err: unknown,
+    ) => {
       const recentLogs = logBuffer.getRecentLogs();
       if (recentLogs.length > 0) {
         logger.error(
@@ -314,11 +359,13 @@ export async function startServer(): Promise<StartedServer> {
         );
       }
     };
-  
+
     if (config.databaseMode === "postgres") {
-      logger.warn("Database mode is postgres but no connection string was set; falling back to embedded PostgreSQL");
+      logger.warn(
+        "Database mode is postgres but no connection string was set; falling back to embedded PostgreSQL",
+      );
     }
-  
+
     const clusterVersionFile = resolve(dataDir, "PG_VERSION");
     const clusterAlreadyInitialized = existsSync(clusterVersionFile);
     const postmasterPidFile = resolve(dataDir, "postmaster.pid");
@@ -330,11 +377,13 @@ export async function startServer(): Promise<StartedServer> {
         return false;
       }
     };
-  
+
     const getRunningPid = (): number | null => {
       if (!existsSync(postmasterPidFile)) return null;
       try {
-        const pidLine = readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim();
+        const pidLine = readFileSync(postmasterPidFile, "utf8")
+          .split("\n")[0]
+          ?.trim();
         const pid = Number(pidLine);
         if (!Number.isInteger(pid) || pid <= 0) return null;
         if (!isPidRunning(pid)) return null;
@@ -343,31 +392,44 @@ export async function startServer(): Promise<StartedServer> {
         return null;
       }
     };
-  
+
     const runningPid = getRunningPid();
     if (runningPid) {
-      logger.warn(`Embedded PostgreSQL already running; reusing existing process (pid=${runningPid}, port=${port})`);
+      logger.warn(
+        `Embedded PostgreSQL already running; reusing existing process (pid=${runningPid}, port=${port})`,
+      );
     } else {
       const configuredAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${configuredPort}/postgres`;
       try {
-        const actualDataDir = await getPostgresDataDirectory(configuredAdminConnectionString);
+        const actualDataDir = await getPostgresDataDirectory(
+          configuredAdminConnectionString,
+        );
         if (
           typeof actualDataDir !== "string" ||
           resolve(actualDataDir) !== resolve(dataDir)
         ) {
-          throw new Error("reachable postgres does not use the expected embedded data directory");
+          throw new Error(
+            "reachable postgres does not use the expected embedded data directory",
+          );
         }
-        await ensurePostgresDatabase(configuredAdminConnectionString, "paperclip");
+        await ensurePostgresDatabase(
+          configuredAdminConnectionString,
+          "paperclip",
+        );
         logger.warn(
           `Embedded PostgreSQL appears to already be reachable without a pid file; reusing existing server on configured port ${configuredPort}`,
         );
       } catch {
         const detectedPort = await detectPort(configuredPort);
         if (detectedPort !== configuredPort) {
-          logger.warn(`Embedded PostgreSQL port is in use; using next free port (requestedPort=${configuredPort}, selectedPort=${detectedPort})`);
+          logger.warn(
+            `Embedded PostgreSQL port is in use; using next free port (requestedPort=${configuredPort}, selectedPort=${detectedPort})`,
+          );
         }
         port = detectedPort;
-        logger.info(`Using embedded PostgreSQL because no DATABASE_URL set (dataDir=${dataDir}, port=${port})`);
+        logger.info(
+          `Using embedded PostgreSQL because no DATABASE_URL set (dataDir=${dataDir}, port=${port})`,
+        );
         embeddedPostgres = new EmbeddedPostgres({
           databaseDir: dataDir,
           user: "paperclip",
@@ -390,7 +452,9 @@ export async function startServer(): Promise<StartedServer> {
             });
           }
         } else {
-          logger.info(`Embedded PostgreSQL cluster already exists (${clusterVersionFile}); skipping init`);
+          logger.info(
+            `Embedded PostgreSQL cluster already exists (${clusterVersionFile}); skipping init`,
+          );
         }
 
         if (existsSync(postmasterPidFile)) {
@@ -409,54 +473,74 @@ export async function startServer(): Promise<StartedServer> {
         embeddedPostgresStartedByThisProcess = true;
       }
     }
-  
+
     const embeddedAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
-    const dbStatus = await ensurePostgresDatabase(embeddedAdminConnectionString, "paperclip");
+    const dbStatus = await ensurePostgresDatabase(
+      embeddedAdminConnectionString,
+      "paperclip",
+    );
     if (dbStatus === "created") {
       logger.info("Created embedded PostgreSQL database: paperclip");
     }
-  
+
     const embeddedConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
-    const shouldAutoApplyFirstRunMigrations = !clusterAlreadyInitialized || dbStatus === "created";
+    const shouldAutoApplyFirstRunMigrations =
+      !clusterAlreadyInitialized || dbStatus === "created";
     if (shouldAutoApplyFirstRunMigrations) {
-      logger.info("Detected first-run embedded PostgreSQL setup; applying pending migrations automatically");
+      logger.info(
+        "Detected first-run embedded PostgreSQL setup; applying pending migrations automatically",
+      );
     }
-    migrationSummary = await ensureMigrations(embeddedConnectionString, "Embedded PostgreSQL", {
-      autoApply: shouldAutoApplyFirstRunMigrations,
-    });
-  
+    migrationSummary = await ensureMigrations(
+      embeddedConnectionString,
+      "Embedded PostgreSQL",
+      {
+        autoApply: shouldAutoApplyFirstRunMigrations,
+      },
+    );
+
     db = createDb(embeddedConnectionString);
     logger.info("Embedded PostgreSQL ready");
     activeDatabaseConnectionString = embeddedConnectionString;
     resolvedEmbeddedPostgresPort = port;
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
-  
-  if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
+
+  if (
+    config.deploymentMode === "local_trusted" &&
+    !isLoopbackHost(config.host)
+  ) {
     throw new Error(
       `local_trusted mode requires loopback host binding (received: ${config.host}). ` +
         "Use authenticated mode for non-loopback deployments.",
     );
   }
-  
-  if (config.deploymentMode === "local_trusted" && config.deploymentExposure !== "private") {
+
+  if (
+    config.deploymentMode === "local_trusted" &&
+    config.deploymentExposure !== "private"
+  ) {
     throw new Error("local_trusted mode only supports private exposure");
   }
-  
+
   if (config.deploymentMode === "authenticated") {
     if (config.authBaseUrlMode === "explicit" && !config.authPublicBaseUrl) {
       throw new Error("auth.baseUrlMode=explicit requires auth.publicBaseUrl");
     }
     if (config.deploymentExposure === "public") {
       if (config.authBaseUrlMode !== "explicit") {
-        throw new Error("authenticated public exposure requires auth.baseUrlMode=explicit");
+        throw new Error(
+          "authenticated public exposure requires auth.baseUrlMode=explicit",
+        );
       }
       if (!config.authPublicBaseUrl) {
-        throw new Error("authenticated public exposure requires auth.publicBaseUrl");
+        throw new Error(
+          "authenticated public exposure requires auth.publicBaseUrl",
+        );
       }
     }
   }
-  
+
   let authReady = config.deploymentMode === "local_trusted";
   let betterAuthHandler: RequestHandler | undefined;
   let resolveSession:
@@ -481,7 +565,9 @@ export async function startServer(): Promise<StartedServer> {
       .split(",")
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
-    const effectiveTrustedOrigins = Array.from(new Set([...derivedTrustedOrigins, ...envTrustedOrigins]));
+    const effectiveTrustedOrigins = Array.from(
+      new Set([...derivedTrustedOrigins, ...envTrustedOrigins]),
+    );
     logger.info(
       {
         authBaseUrlMode: config.authBaseUrlMode,
@@ -494,29 +580,46 @@ export async function startServer(): Promise<StartedServer> {
       },
       "Authenticated mode auth origin configuration",
     );
-    const auth = createBetterAuthInstance(db as any, config, effectiveTrustedOrigins);
+    const auth = createBetterAuthInstance(
+      db as any,
+      config,
+      effectiveTrustedOrigins,
+    );
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
-    resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
-    await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
+    resolveSessionFromHeaders = (headers) =>
+      resolveBetterAuthSessionFromHeaders(auth, headers);
+    await initializeBoardClaimChallenge(db as any, {
+      deploymentMode: config.deploymentMode,
+    });
     authReady = true;
   }
-  
+
   const listenPort = await detectPort(config.port);
   if (listenPort !== config.port) {
     config.port = listenPort;
   }
-  if (resolvedEmbeddedPostgresPort !== null && resolvedEmbeddedPostgresPort !== config.embeddedPostgresPort) {
+  if (
+    resolvedEmbeddedPostgresPort !== null &&
+    resolvedEmbeddedPostgresPort !== config.embeddedPostgresPort
+  ) {
     config.embeddedPostgresPort = resolvedEmbeddedPostgresPort;
   }
   if (config.authBaseUrlMode === "explicit" && config.authPublicBaseUrl) {
-    config.authPublicBaseUrl = rewriteLocalUrlPort(config.authPublicBaseUrl, listenPort);
+    config.authPublicBaseUrl = rewriteLocalUrlPort(
+      config.authPublicBaseUrl,
+      listenPort,
+    );
   }
   maybePersistWorktreeRuntimePorts({
     serverPort: listenPort,
     databasePort: resolvedEmbeddedPostgresPort,
   });
-  const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
+  const uiMode = config.uiDevMiddleware
+    ? "vite-dev"
+    : config.serveUi
+      ? "static"
+      : "none";
   const storageService = createStorageServiceFromConfig(config);
   const feedback = feedbackService(db as any, {
     shareClient: createFeedbackTraceShareClientFromConfig(config),
@@ -535,18 +638,22 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
   });
-  const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
+  const server = createServer(
+    app as unknown as Parameters<typeof createServer>[0],
+  );
 
   // Increase keep-alive timeouts to safely outlive default idle timeouts
   // of common reverse proxies and load balancers (like AWS ALB, Nginx, or Traefik).
   // This prevents intermittent 502/ECONNRESET errors caused by Node's 5s default.
   server.keepAliveTimeout = 185000;
   server.headersTimeout = 186000;
-  
+
   if (listenPort !== config.port) {
-    logger.warn(`Requested port is busy; using next free port (requestedPort=${config.port}, selectedPort=${listenPort})`);
+    logger.warn(
+      `Requested port is busy; using next free port (requestedPort=${config.port}, selectedPort=${listenPort})`,
+    );
   }
-  
+
   const runtimeListenHost = config.host;
   const runtimeApiHost =
     runtimeListenHost === "0.0.0.0" || runtimeListenHost === "::"
@@ -557,7 +664,7 @@ export async function startServer(): Promise<StartedServer> {
   if (!process.env.PAPERCLIP_API_URL) {
     process.env.PAPERCLIP_API_URL = `http://${runtimeApiHost}:${listenPort}`;
   }
-  
+
   setupLiveEventsWebSocketServer(server, db as any, {
     deploymentMode: config.deploymentMode,
     resolveSessionFromHeaders,
@@ -573,13 +680,16 @@ export async function startServer(): Promise<StartedServer> {
       }
     })
     .catch((err) => {
-      logger.error({ err }, "startup reconciliation of persisted runtime services failed");
+      logger.error(
+        { err },
+        "startup reconciliation of persisted runtime services failed",
+      );
     });
-  
+
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
-  
+
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
     void heartbeat
@@ -592,7 +702,10 @@ export async function startServer(): Promise<StartedServer> {
           reconciled.continuationRequeued > 0 ||
           reconciled.escalated > 0
         ) {
-          logger.warn({ ...reconciled }, "startup stranded-issue reconciliation changed assigned issue state");
+          logger.warn(
+            { ...reconciled },
+            "startup stranded-issue reconciliation changed assigned issue state",
+          );
         }
       })
       .catch((err) => {
@@ -620,28 +733,46 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "routine scheduler tick failed");
         });
-  
+
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
       void heartbeat
         .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
-        .then(() => heartbeat.resumeQueuedRuns())
-        .then(async () => {
-          const reconciled = await heartbeat.reconcileStrandedAssignedIssues();
+        .catch((err) => {
+          logger.error(
+            { err, stage: "reapOrphanedRuns" },
+            "periodic heartbeat recovery failed",
+          );
+        });
+      void heartbeat.resumeQueuedRuns().catch((err) => {
+        logger.error(
+          { err, stage: "resumeQueuedRuns" },
+          "periodic heartbeat recovery failed",
+        );
+      });
+      void heartbeat
+        .reconcileStrandedAssignedIssues()
+        .then((reconciled) => {
           if (
             reconciled.dispatchRequeued > 0 ||
             reconciled.continuationRequeued > 0 ||
             reconciled.escalated > 0
           ) {
-            logger.warn({ ...reconciled }, "periodic stranded-issue reconciliation changed assigned issue state");
+            logger.warn(
+              { ...reconciled },
+              "periodic stranded-issue reconciliation changed assigned issue state",
+            );
           }
         })
         .catch((err) => {
-          logger.error({ err }, "periodic heartbeat recovery failed");
+          logger.error(
+            { err, stage: "reconcileStrandedAssignedIssues" },
+            "periodic heartbeat recovery failed",
+          );
         });
     }, config.heartbeatSchedulerIntervalMs);
   }
-  
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
     const settingsSvc = instanceSettingsService(db);
@@ -649,7 +780,9 @@ export async function startServer(): Promise<StartedServer> {
 
     const runScheduledBackup = async () => {
       if (backupInFlight) {
-        logger.warn("Skipping scheduled database backup because a previous backup is still running");
+        logger.warn(
+          "Skipping scheduled database backup because a previous backup is still running",
+        );
         return;
       }
 
@@ -676,7 +809,10 @@ export async function startServer(): Promise<StartedServer> {
           `Automatic database backup complete: ${formatDatabaseBackupResult(result)}`,
         );
       } catch (err) {
-        logger.error({ err, backupDir: config.databaseBackupDir }, "Automatic database backup failed");
+        logger.error(
+          { err, backupDir: config.databaseBackupDir },
+          "Automatic database backup failed",
+        );
       } finally {
         backupInFlight = false;
       }
@@ -694,7 +830,7 @@ export async function startServer(): Promise<StartedServer> {
       void runScheduledBackup();
     }, backupIntervalMs);
   }
-  
+
   // Wait for external adapters to finish loading before accepting requests.
   // Without this, adapter type validation (assertKnownAdapterType) would
   // reject valid external adapter types during the startup loading window.
@@ -712,7 +848,10 @@ export async function startServer(): Promise<StartedServer> {
       server.off("error", onError);
       logger.info(`Server listening on ${config.host}:${listenPort}`);
       if (process.env.PAPERCLIP_OPEN_ON_LISTEN === "true") {
-        const openHost = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
+        const openHost =
+          config.host === "0.0.0.0" || config.host === "::"
+            ? "127.0.0.1"
+            : config.host;
         const url = `http://${openHost}:${listenPort}`;
         void import("open")
           .then((mod) => mod.default(url))
@@ -723,10 +862,10 @@ export async function startServer(): Promise<StartedServer> {
             logger.warn({ err, url }, "Failed to open browser on startup");
           });
       }
-        printStartupBanner({
-          bind: config.bind,
-          host: config.host,
-          deploymentMode: config.deploymentMode,
+      printStartupBanner({
+        bind: config.bind,
+        host: config.host,
+        deploymentMode: config.deploymentMode,
         deploymentExposure: config.deploymentExposure,
         authReady,
         requestedPort: config.port,
@@ -761,7 +900,7 @@ export async function startServer(): Promise<StartedServer> {
       resolveListen();
     });
   });
-  
+
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
       const telemetryClient = getTelemetryClient();

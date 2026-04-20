@@ -8,7 +8,10 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
-import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
+import {
+  privateHostnameGuard,
+  resolvePrivateHostnameAllowSet,
+} from "./middleware/private-hostname-guard.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
@@ -36,15 +39,22 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
-import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
+import {
+  DEFAULT_LOCAL_PLUGIN_DIR,
+  pluginLoader,
+} from "./services/plugin-loader.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
 import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
 import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
-import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
+import {
+  buildHostServices,
+  flushPluginLogBuffer,
+} from "./services/plugin-host-services.js";
 import { createPluginEventBus } from "./services/plugin-event-bus.js";
+import { createPluginStreamBus } from "./services/plugin-stream-bus.js";
 import { setPluginEventBus } from "./services/activity-log.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
 import { createPluginHostServiceCleanup } from "./services/plugin-host-service-cleanup.js";
@@ -84,7 +94,8 @@ export function resolveViteHmrPort(serverPort: number): number {
 export function shouldServeViteDevHtml(req: ExpressRequest): boolean {
   const pathname = req.path;
   if (VITE_DEV_STATIC_PATHS.has(pathname)) return false;
-  if (VITE_DEV_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return false;
+  if (VITE_DEV_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix)))
+    return false;
   return req.accepts(["html"]) === "html";
 }
 
@@ -94,7 +105,8 @@ export function shouldEnablePrivateHostnameGuard(opts: {
 }): boolean {
   return (
     opts.deploymentExposure === "private" &&
-    (opts.deploymentMode === "local_trusted" || opts.deploymentMode === "authenticated")
+    (opts.deploymentMode === "local_trusted" ||
+      opts.deploymentMode === "authenticated")
   );
 }
 
@@ -122,18 +134,22 @@ export async function createApp(
     hostVersion?: string;
     localPluginDir?: string;
     betterAuthHandler?: express.RequestHandler;
-    resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    resolveSession?: (
+      req: ExpressRequest,
+    ) => Promise<BetterAuthSessionResult | null>;
   },
 ) {
   const app = express();
 
-  app.use(express.json({
-    // Company import/export payloads can inline full portable packages.
-    limit: "10mb",
-    verify: (req, _res, buf) => {
-      (req as unknown as { rawBody: Buffer }).rawBody = buf;
-    },
-  }));
+  app.use(
+    express.json({
+      // Company import/export payloads can inline full portable packages.
+      limit: "10mb",
+      verify: (req, _res, buf) => {
+        (req as unknown as { rawBody: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(httpLogger);
   const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
     deploymentMode: opts.deploymentMode,
@@ -179,9 +195,11 @@ export async function createApp(
   api.use(agentRoutes(db));
   api.use(assetRoutes(db, opts.storageService));
   api.use(projectRoutes(db));
-  api.use(issueRoutes(db, opts.storageService, {
-    feedbackExportService: opts.feedbackExportService,
-  }));
+  api.use(
+    issueRoutes(db, opts.storageService, {
+      feedbackExportService: opts.feedbackExportService,
+    }),
+  );
   api.use(routineRoutes(db));
   api.use(executionWorkspaceRoutes(db));
   api.use(goalRoutes(db));
@@ -198,6 +216,7 @@ export async function createApp(
   const workerManager = createPluginWorkerManager();
   const pluginRegistry = pluginRegistryService(db);
   const eventBus = createPluginEventBus();
+  const streamBus = createPluginStreamBus();
   setPluginEventBus(eventBus);
   const jobStore = pluginJobStore(db);
   const lifecycle = pluginLifecycleManager(db, { workerManager });
@@ -217,8 +236,12 @@ export async function createApp(
     scheduler,
     jobStore,
   });
-  const hostServiceCleanup = createPluginHostServiceCleanup(lifecycle, hostServicesDisposers);
-  let viteHtmlRenderer: ReturnType<typeof createCachedViteHtmlRenderer> | null = null;
+  const hostServiceCleanup = createPluginHostServiceCleanup(
+    lifecycle,
+    hostServicesDisposers,
+  );
+  let viteHtmlRenderer: ReturnType<typeof createCachedViteHtmlRenderer> | null =
+    null;
   const loader = pluginLoader(
     db,
     { localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR },
@@ -229,6 +252,7 @@ export async function createApp(
       jobStore,
       toolDispatcher,
       lifecycleManager: lifecycle,
+      streamBus,
       instanceInfo: {
         instanceId: opts.instanceId ?? "default",
         hostVersion: opts.hostVersion ?? "0.0.0",
@@ -238,7 +262,13 @@ export async function createApp(
           const handle = workerManager.getWorker(pluginId);
           if (handle) handle.notify(method, params);
         };
-        const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker);
+        const services = buildHostServices(
+          db,
+          pluginId,
+          manifest.id,
+          eventBus,
+          notifyWorker,
+        );
         hostServicesDisposers.set(pluginId, () => services.dispose());
         return createHostClientHandlers({
           pluginId,
@@ -255,7 +285,7 @@ export async function createApp(
       { scheduler, jobStore },
       { workerManager },
       { toolDispatcher },
-      { workerManager },
+      { workerManager, streamBus },
     ),
   );
   api.use(adapterRoutes());
@@ -271,9 +301,11 @@ export async function createApp(
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
   });
-  app.use(pluginUiStaticRoutes(db, {
-    localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
-  }));
+  app.use(
+    pluginUiStaticRoutes(db, {
+      localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
+    }),
+  );
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   if (opts.uiMode === "static") {
@@ -282,9 +314,13 @@ export async function createApp(
       path.resolve(__dirname, "../ui-dist"),
       path.resolve(__dirname, "../../ui/dist"),
     ];
-    const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
+    const uiDist = candidates.find((p) =>
+      fs.existsSync(path.join(p, "index.html")),
+    );
     if (uiDist) {
-      const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
+      const indexHtml = applyUiBranding(
+        fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"),
+      );
       // Hashed asset files (Vite emits them under /assets/<name>.<hash>.<ext>)
       // never change once built, so they can be cached aggressively.
       app.use(
@@ -346,7 +382,9 @@ export async function createApp(
           port: hmrPort,
           clientPort: hmrPort,
         },
-        allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
+        allowedHosts: privateHostnameGateEnabled
+          ? Array.from(privateHostnameAllowSet)
+          : undefined,
       },
     });
     viteHtmlRenderer = createCachedViteHtmlRenderer({
@@ -380,36 +418,45 @@ export async function createApp(
   scheduler.start();
   const feedbackExportTimer = opts.feedbackExportService
     ? setInterval(() => {
-      void opts.feedbackExportService?.flushPendingFeedbackTraces().catch((err) => {
-        logger.error({ err }, "Failed to flush pending feedback exports");
-      });
-    }, FEEDBACK_EXPORT_FLUSH_INTERVAL_MS)
+        void opts.feedbackExportService
+          ?.flushPendingFeedbackTraces()
+          .catch((err) => {
+            logger.error({ err }, "Failed to flush pending feedback exports");
+          });
+      }, FEEDBACK_EXPORT_FLUSH_INTERVAL_MS)
     : null;
   feedbackExportTimer?.unref?.();
   if (opts.feedbackExportService) {
-    void opts.feedbackExportService.flushPendingFeedbackTraces().catch((err) => {
-      logger.error({ err }, "Failed to flush pending feedback exports");
-    });
+    void opts.feedbackExportService
+      .flushPendingFeedbackTraces()
+      .catch((err) => {
+        logger.error({ err }, "Failed to flush pending feedback exports");
+      });
   }
   void toolDispatcher.initialize().catch((err) => {
     logger.error({ err }, "Failed to initialize plugin tool dispatcher");
   });
-  const devWatcher = opts.uiMode === "vite-dev"
-    ? createPluginDevWatcher(
-      lifecycle,
-      async (pluginId) => (await pluginRegistry.getById(pluginId))?.packagePath ?? null,
-    )
-    : null;
-  void loader.loadAll().then((result) => {
-    if (!result) return;
-    for (const loaded of result.results) {
-      if (devWatcher && loaded.success && loaded.plugin.packagePath) {
-        devWatcher.watch(loaded.plugin.id, loaded.plugin.packagePath);
+  const devWatcher =
+    opts.uiMode === "vite-dev"
+      ? createPluginDevWatcher(
+          lifecycle,
+          async (pluginId) =>
+            (await pluginRegistry.getById(pluginId))?.packagePath ?? null,
+        )
+      : null;
+  void loader
+    .loadAll()
+    .then((result) => {
+      if (!result) return;
+      for (const loaded of result.results) {
+        if (devWatcher && loaded.success && loaded.plugin.packagePath) {
+          devWatcher.watch(loaded.plugin.id, loaded.plugin.packagePath);
+        }
       }
-    }
-  }).catch((err) => {
-    logger.error({ err }, "Failed to load ready plugins on startup");
-  });
+    })
+    .catch((err) => {
+      logger.error({ err }, "Failed to load ready plugins on startup");
+    });
   process.once("exit", () => {
     if (feedbackExportTimer) clearInterval(feedbackExportTimer);
     devWatcher?.close();
