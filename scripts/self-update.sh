@@ -77,27 +77,24 @@ git log --oneline "$MERGE_BASE..$UPSTREAM_HEAD" 2>&1 | tee -a "$LOG_FILE"
 # Save pre-rebase state for rollback
 PRE_REBASE_HEAD=$(git rev-parse HEAD)
 
+# Ensure toolchain on PATH (pnpm lives in ~/.local/bin), allow devDependencies
+export PATH="$HOME/.local/bin:$PATH"
+unset NODE_ENV
+
 # Backup database before update
 log "Backing up database..."
 pnpm db:backup 2>&1 | tee -a "$LOG_FILE" || log "WARN: DB backup failed, continuing anyway"
 
 # Rebase custom commits onto updated upstream
+# -X ours: on conflict prefer our version (e.g. custom .gitignore)
 log "Rebasing $CUSTOM_COMMITS custom commits onto origin/$UPSTREAM_BRANCH..."
-if git rebase "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+if git rebase -X ours "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
   log "Rebase succeeded"
 else
   log "ERROR: Rebase failed — conflicts detected"
   git rebase --abort 2>&1 | tee -a "$LOG_FILE"
   log "Rebase aborted. Staying on pre-update version ($PRE_REBASE_HEAD)"
   log "Conflicting files need manual resolution"
-
-  # Show which files would conflict
-  log "Attempting dry-run to identify conflicts..."
-  git rebase "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE" || true
-  CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || echo "unknown")
-  git rebase --abort 2>/dev/null || true
-  log "Conflict files: $CONFLICT_FILES"
-
   exit 1
 fi
 
