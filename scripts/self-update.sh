@@ -98,6 +98,23 @@ else
   exit 1
 fi
 
+# Rollback helper — restores previous state and restarts service.
+# Used on any post-rebase failure (install/build/migration/service start).
+rollback() {
+  local reason="$1"
+  log "ERROR: $reason"
+  log "Rolling back to pre-rebase state ($PRE_REBASE_HEAD)..."
+  git reset --hard "$PRE_REBASE_HEAD" 2>&1 | tee -a "$LOG_FILE" # claude-allow-hard-reset
+  pnpm install 2>&1 | tee -a "$LOG_FILE" || log "WARN: rollback pnpm install non-zero"
+  pnpm -r build 2>&1 | tee -a "$LOG_FILE" || log "WARN: rollback build non-zero"
+  sudo systemctl restart paperclip 2>&1 | tee -a "$LOG_FILE"
+  log "Rolled back. Check: sudo journalctl -u paperclip -n 50"
+  exit 1
+}
+
+# Disable exit-on-error past this point — we handle failures via explicit rollback
+set +e
+
 # Check if dependencies changed in upstream
 DEPS_CHANGED=false
 if git diff "$MERGE_BASE..$UPSTREAM_HEAD" --name-only | grep -qE '(pnpm-lock\.yaml|package\.json)'; then
@@ -108,15 +125,22 @@ fi
 if [ "$DEPS_CHANGED" = true ]; then
   log "Dependencies changed, running pnpm install..."
   pnpm install 2>&1 | tee -a "$LOG_FILE"
+  if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    rollback "pnpm install failed after rebase"
+  fi
 else
   log "No dependency changes, skipping install"
 fi
 
-# Rebuild
+# Rebuild — on failure, rollback. Build failures typically mean rebase merged
+# logically incompatible code from upstream + our custom commits.
 log "Building..."
 pnpm -r build 2>&1 | tee -a "$LOG_FILE"
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+  rollback "build failed after rebase — likely custom commits conflict with upstream logic"
+fi
 
-# Run migrations
+# Run migrations — soft warning only; drizzle is idempotent for ADD COLUMN IF NOT EXISTS
 log "Running migrations..."
 pnpm db:migrate 2>&1 | tee -a "$LOG_FILE" || log "WARN: Migration step returned non-zero"
 
@@ -131,11 +155,5 @@ if systemctl is-active --quiet paperclip; then
   UPSTREAM_SHORT=$(git rev-parse --short "origin/$UPSTREAM_BRANCH")
   log "SUCCESS: Paperclip updated — custom branch rebased onto upstream $UPSTREAM_SHORT, HEAD=$NEW_COMMIT"
 else
-  log "ERROR: Service failed to start after update"
-  log "Rolling back to pre-rebase state..."
-  git reset --hard "$PRE_REBASE_HEAD" 2>&1 | tee -a "$LOG_FILE"
-  pnpm -r build 2>&1 | tee -a "$LOG_FILE"
-  sudo systemctl restart paperclip 2>&1 | tee -a "$LOG_FILE"
-  log "Rolled back to $PRE_REBASE_HEAD. Check: sudo journalctl -u paperclip -n 50"
-  exit 1
+  rollback "Service failed to start after update"
 fi
