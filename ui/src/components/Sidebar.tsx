@@ -168,10 +168,16 @@ function SidebarPluginLaunchers({
         const icon = launcherIconMap[launcher.id?.replace(/-nav$/, "")] ?? MessageCircle;
         const target = launcher.action?.type === "navigate" ? launcher.action.target : null;
         if (!target) return null;
+        // Plugin authors write /plugins/<pluginKey> but the React route binds
+        // :pluginId to the UUID; rewrite key -> UUID so PluginPage can resolve it.
+        const rewritten = target.replace(
+          new RegExp(`^/plugins/${launcher.pluginKey}(?=/|$)`),
+          `/plugins/${launcher.pluginId}`,
+        );
         const to =
-          prefix && target.startsWith("/") && !target.startsWith(`/${prefix}`)
-            ? `/${prefix}${target}`
-            : target;
+          prefix && rewritten.startsWith("/") && !rewritten.startsWith(`/${prefix}`)
+            ? `/${prefix}${rewritten}`
+            : rewritten;
         return (
           <SidebarNavItem
             key={`${launcher.pluginKey}:${launcher.id}`}
