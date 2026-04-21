@@ -9,9 +9,11 @@ import {
   SquarePen,
   Network,
   Boxes,
+  Puzzle,
   Repeat,
   GitBranch,
   Settings,
+  MessageCircle,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -29,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
 import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
+import { usePluginLaunchers } from "@/plugins/launchers";
 
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
@@ -122,6 +125,7 @@ export function Sidebar() {
         <SidebarSection label="Company">
           <SidebarNavItem to="/org" label="Org" icon={Network} />
           <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+          <SidebarNavItem to="/instance/settings/plugins" label="Plugins" icon={Puzzle} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
           <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
@@ -136,5 +140,47 @@ export function Sidebar() {
         />
       </nav>
     </aside>
+  );
+}
+
+const launcherIconMap: Record<string, typeof MessageCircle> = {
+  chat: MessageCircle,
+};
+
+function SidebarPluginLaunchers({
+  companyId,
+  prefix,
+}: {
+  companyId: string | null;
+  prefix: string | null;
+}) {
+  const { launchers } = usePluginLaunchers({
+    placementZones: ["sidebar"],
+    companyId,
+    enabled: !!companyId,
+  });
+
+  if (launchers.length === 0) return null;
+
+  return (
+    <>
+      {launchers.map((launcher) => {
+        const icon = launcherIconMap[launcher.id?.replace(/-nav$/, "")] ?? MessageCircle;
+        const target = launcher.action?.type === "navigate" ? launcher.action.target : null;
+        if (!target) return null;
+        const to =
+          prefix && target.startsWith("/") && !target.startsWith(`/${prefix}`)
+            ? `/${prefix}${target}`
+            : target;
+        return (
+          <SidebarNavItem
+            key={`${launcher.pluginKey}:${launcher.id}`}
+            to={to}
+            label={launcher.displayName}
+            icon={icon}
+          />
+        );
+      })}
+    </>
   );
 }
