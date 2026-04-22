@@ -1846,6 +1846,21 @@ export function pluginLoader(
       // 5. Spawn worker process
       // ------------------------------------------------------------------
       const streamBus = runtimeServices?.streamBus;
+      // Forward the agent-JWT secret so plugins that need to mint short-lived
+      // agent tokens (e.g. paperclip-chat calling back into the Paperclip API)
+      // can do so without a separate out-of-band credential. Only forwarded if
+      // the plugin manifest declares the `agents.read` capability.
+      const pluginEnv: Record<string, string> = {};
+      const capabilities: string[] = Array.isArray(manifest.capabilities) ? (manifest.capabilities as string[]) : [];
+      if (capabilities.includes("agents.read") && process.env.PAPERCLIP_AGENT_JWT_SECRET) {
+        pluginEnv.PAPERCLIP_AGENT_JWT_SECRET = process.env.PAPERCLIP_AGENT_JWT_SECRET;
+        if (process.env.PAPERCLIP_AGENT_JWT_ISSUER) {
+          pluginEnv.PAPERCLIP_AGENT_JWT_ISSUER = process.env.PAPERCLIP_AGENT_JWT_ISSUER;
+        }
+        if (process.env.PAPERCLIP_AGENT_JWT_AUDIENCE) {
+          pluginEnv.PAPERCLIP_AGENT_JWT_AUDIENCE = process.env.PAPERCLIP_AGENT_JWT_AUDIENCE;
+        }
+      }
       const workerOptions: WorkerStartOptions = {
         entrypointPath: workerEntrypoint,
         manifest,
