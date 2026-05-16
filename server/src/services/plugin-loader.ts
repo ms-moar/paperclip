@@ -1870,7 +1870,7 @@ export function pluginLoader(
         databaseNamespace,
         hostHandlers,
         autoRestart: true,
-        env: buildPluginWorkerEnv({ manifest, instanceInfo }),
+        env: { ...buildPluginWorkerEnv({ manifest, instanceInfo }), ...pluginEnv },
       };
 
       // Repo-local plugin installs can resolve workspace TS sources at runtime
