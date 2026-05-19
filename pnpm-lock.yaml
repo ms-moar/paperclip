@@ -222,6 +222,25 @@ importers:
         specifier: ^5.7.3
         version: 5.9.3
 
+  packages/adapters/glm-local:
+    dependencies:
+      '@paperclipai/adapter-claude-local':
+        specifier: workspace:*
+        version: link:../claude-local
+      '@paperclipai/adapter-utils':
+        specifier: workspace:*
+        version: link:../../adapter-utils
+      picocolors:
+        specifier: ^1.1.1
+        version: 1.1.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.6.0
+        version: 24.12.0
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
   packages/adapters/grok-local:
     dependencies:
       '@paperclipai/adapter-utils':
@@ -645,6 +664,9 @@ importers:
       '@paperclipai/adapter-gemini-local':
         specifier: workspace:*
         version: link:../packages/adapters/gemini-local
+      '@paperclipai/adapter-glm-local':
+        specifier: workspace:*
+        version: link:../packages/adapters/glm-local
       '@paperclipai/adapter-grok-local':
         specifier: workspace:*
         version: link:../packages/adapters/grok-local
