@@ -241,18 +241,15 @@ export function pluginUiStaticRoutes(db: Db, options: PluginUiStaticRouteOptions
       return;
     }
 
-    // Step 1: Look up the plugin
+    // Step 1: Look up the plugin by UUID or key.
+    // Only attempt UUID lookup when pluginId is a valid UUID format;
+    // passing a plugin key (e.g. "agent-pixels.camera") directly to
+    // getById causes a PostgreSQL uuid type error that Drizzle wraps
+    // in DrizzleQueryError, hiding the original PG error code.
     let plugin = null;
-    try {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pluginId);
+    if (isUuid) {
       plugin = await registry.getById(pluginId);
-    } catch (error) {
-      const maybeCode =
-        typeof error === "object" && error !== null && "code" in error
-          ? (error as { code?: unknown }).code
-          : undefined;
-      if (maybeCode !== "22P02") {
-        throw error;
-      }
     }
     if (!plugin) {
       plugin = await registry.getByKey(pluginId);
