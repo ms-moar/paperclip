@@ -32,27 +32,29 @@ export function isCodexLocalFastModeSupported(model: string | null | undefined):
   );
 }
 
+// Models that work on the ChatGPT-subscription Codex auth lane.
+// Models requiring an OpenAI API key (gpt-5, gpt-5-codex, gpt-5.3-codex-spark, gpt-5.4-codex,
+// o3, o4-mini, gpt-5-mini, gpt-5-nano, o3-mini, codex-mini-latest, gpt-4o) are intentionally
+// omitted from the dropdown — selecting them returns 400 invalid_request_error on first run.
+// To use them, set adapter `model` manually after switching the host to API-key auth.
 export const models = [
+  { id: "gpt-5.5", label: "gpt-5.5" },
   { id: "gpt-5.4", label: "gpt-5.4" },
+  { id: "gpt-5.4-mini", label: "gpt-5.4-mini" },
   { id: DEFAULT_CODEX_LOCAL_MODEL, label: DEFAULT_CODEX_LOCAL_MODEL },
-  { id: "gpt-5.3-codex-spark", label: "gpt-5.3-codex-spark" },
-  { id: "gpt-5", label: "gpt-5" },
-  { id: "o3", label: "o3" },
-  { id: "o4-mini", label: "o4-mini" },
-  { id: "gpt-5-mini", label: "gpt-5-mini" },
-  { id: "gpt-5-nano", label: "gpt-5-nano" },
-  { id: "o3-mini", label: "o3-mini" },
-  { id: "codex-mini-latest", label: "Codex Mini" },
+  { id: "gpt-5.2", label: "gpt-5.2" },
 ];
 
 export const modelProfiles: AdapterModelProfileDefinition[] = [
   {
     key: "cheap",
     label: "Cheap",
-    description: "Use the lowest-cost known Codex local model lane without changing the primary model.",
+    description: "Use the lowest-cost ChatGPT-subscription Codex model lane.",
     adapterConfig: {
-      model: "gpt-5.3-codex-spark",
-      // Spark is the cheap lane by model price; high effort keeps Codex coding behavior usable for delegated work.
+      // gpt-5.4-mini is the cheapest model available on the ChatGPT-subscription auth lane.
+      // gpt-5.3-codex-spark (former value) requires API-key billing and hard-fails with
+      // 400 invalid_request_error on ChatGPT plan — see memory reference_codex_chatgpt_models.md.
+      model: "gpt-5.4-mini",
       modelReasoningEffort: "high",
     },
     source: "adapter_default",
