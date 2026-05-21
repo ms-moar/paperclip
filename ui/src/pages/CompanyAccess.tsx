@@ -34,6 +34,7 @@ const permissionLabels: Record<PermissionKey, string> = {
   "tasks:assign": "Assign tasks",
   "tasks:assign_scope": "Assign scoped tasks",
   "tasks:manage_active_checkouts": "Manage active task checkouts",
+  "tasks:view_all": "View all tasks (otherwise: own + descendants only)",
   "joins:approve": "Approve join requests",
   "environments:manage": "Manage environments",
 };
@@ -44,10 +45,10 @@ function formatGrantSummary(member: CompanyMember) {
 }
 
 const implicitRoleGrantMap: Record<NonNullable<CompanyMember["membershipRole"]>, PermissionKey[]> = {
-  owner: ["agents:create", "users:invite", "users:manage_permissions", "tasks:assign", "joins:approve"],
-  admin: ["agents:create", "users:invite", "tasks:assign", "joins:approve"],
-  operator: ["tasks:assign"],
-  viewer: [],
+  owner: ["agents:create", "users:invite", "users:manage_permissions", "tasks:assign", "tasks:view_all", "joins:approve"],
+  admin: ["agents:create", "users:invite", "tasks:assign", "tasks:view_all", "joins:approve"],
+  operator: ["tasks:assign", "tasks:view_all"],
+  viewer: ["tasks:view_all"],
 };
 
 const reassignmentIssueStatuses = "backlog,todo,in_progress,in_review,blocked,failed,timed_out";
