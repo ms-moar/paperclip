@@ -178,8 +178,15 @@ function resolveLauncherNavigationTarget(
     );
   }
   if (rewritten.startsWith("/")) {
-    // Absolute target: let applyCompanyPrefix decide whether to prefix
-    // (global routes like /instance/* pass through, board routes get the prefix).
+    // `applyCompanyPrefix` is reliable for /instance/*, /auth/*, etc. (known
+    // global roots) AND for known board roots (/issues, /agents, ...), but it
+    // treats any other first segment as an existing company prefix. That
+    // mis-classifies `/plugins/<id>` as already-prefixed, so we force the
+    // company prefix for plugin paths here when the target isn't already
+    // company-prefixed.
+    if (companyPrefix && /^\/plugins(\/|$)/.test(rewritten) && !rewritten.startsWith(`/${companyPrefix}/`)) {
+      return `/${companyPrefix}${rewritten}`;
+    }
     return applyCompanyPrefix(rewritten, companyPrefix);
   }
   return companyPrefix ? `/${companyPrefix}/${rewritten}` : rewritten;
