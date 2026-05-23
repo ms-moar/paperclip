@@ -364,6 +364,31 @@ type PaperclipWakeChildIssueSummary = {
   summary: string | null;
 };
 
+type PaperclipWakeChildAuditEntry = {
+  id: string | null;
+  identifier: string | null;
+  title: string | null;
+  status: string | null;
+  priority: string | null;
+  assigneeAgentId: string | null;
+  assigneeUserId: string | null;
+  updatedAt: string | null;
+  ageHours: number | null;
+  latestCommentPreview: string | null;
+  latestCommentPreviewTruncated: boolean;
+  latestCommentAuthorType: string | null;
+  latestCommentAuthorId: string | null;
+  latestCommentCreatedAt: string | null;
+  routingAskDetected: boolean;
+};
+
+type PaperclipWakeChildAuditDigest = {
+  blockedChildren: PaperclipWakeChildAuditEntry[];
+  blockedChildrenTotal: number;
+  blockedChildrenListTruncated: boolean;
+  scannedAt: string | null;
+};
+
 type PaperclipWakeBlockerSummary = {
   id: string | null;
   identifier: string | null;
@@ -395,6 +420,7 @@ type PaperclipWakePayload = {
   interactionStatus: string | null;
   childIssueSummaries: PaperclipWakeChildIssueSummary[];
   childIssueSummaryTruncated: boolean;
+  childAuditDigest: PaperclipWakeChildAuditDigest | null;
   commentIds: string[];
   latestCommentId: string | null;
   comments: PaperclipWakeComment[];
@@ -482,6 +508,55 @@ function normalizePaperclipWakeChildIssueSummary(value: unknown): PaperclipWakeC
   const summary = asString(child.summary, "").trim() || null;
   if (!id && !identifier && !title && !status && !summary) return null;
   return { id, identifier, title, status, priority, summary };
+}
+
+function normalizePaperclipWakeChildAuditEntry(value: unknown): PaperclipWakeChildAuditEntry | null {
+  const entry = parseObject(value);
+  const id = asString(entry.id, "").trim() || null;
+  const identifier = asString(entry.identifier, "").trim() || null;
+  const title = asString(entry.title, "").trim() || null;
+  const status = asString(entry.status, "").trim() || null;
+  const priority = asString(entry.priority, "").trim() || null;
+  if (!id && !identifier && !title && !status) return null;
+  const ageHoursRaw = asNumber(entry.ageHours, -1);
+  const previewRaw = asString(entry.latestCommentPreview, "");
+  const preview = previewRaw.trim() ? previewRaw : null;
+  return {
+    id,
+    identifier,
+    title,
+    status,
+    priority,
+    assigneeAgentId: asString(entry.assigneeAgentId, "").trim() || null,
+    assigneeUserId: asString(entry.assigneeUserId, "").trim() || null,
+    updatedAt: asString(entry.updatedAt, "").trim() || null,
+    ageHours: ageHoursRaw >= 0 ? ageHoursRaw : null,
+    latestCommentPreview: preview,
+    latestCommentPreviewTruncated: asBoolean(entry.latestCommentPreviewTruncated, false),
+    latestCommentAuthorType: asString(entry.latestCommentAuthorType, "").trim() || null,
+    latestCommentAuthorId: asString(entry.latestCommentAuthorId, "").trim() || null,
+    latestCommentCreatedAt: asString(entry.latestCommentCreatedAt, "").trim() || null,
+    routingAskDetected: asBoolean(entry.routingAskDetected, false),
+  };
+}
+
+function normalizePaperclipWakeChildAuditDigest(value: unknown): PaperclipWakeChildAuditDigest | null {
+  if (value == null) return null;
+  const digest = parseObject(value);
+  const blockedChildren = Array.isArray(digest.blockedChildren)
+    ? digest.blockedChildren
+        .map((entry) => normalizePaperclipWakeChildAuditEntry(entry))
+        .filter((entry): entry is PaperclipWakeChildAuditEntry => Boolean(entry))
+    : [];
+  const blockedChildrenTotal = asNumber(digest.blockedChildrenTotal, blockedChildren.length);
+  return {
+    blockedChildren,
+    blockedChildrenTotal,
+    blockedChildrenListTruncated:
+      asBoolean(digest.blockedChildrenListTruncated, false) ||
+      blockedChildrenTotal > blockedChildren.length,
+    scannedAt: asString(digest.scannedAt, "").trim() || null,
+  };
 }
 
 function normalizePaperclipWakeBlockerSummary(value: unknown): PaperclipWakeBlockerSummary | null {
@@ -586,7 +661,20 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
     : [];
 
   const activeTreeHold = normalizePaperclipWakeTreeHoldSummary(payload.activeTreeHold);
-  if (comments.length === 0 && commentIds.length === 0 && childIssueSummaries.length === 0 && unresolvedBlockerIssueIds.length === 0 && unresolvedBlockerSummaries.length === 0 && !activeTreeHold && !executionStage && !continuationSummary && !livenessContinuation && !normalizePaperclipWakeIssue(payload.issue)) {
+  const childAuditDigest = normalizePaperclipWakeChildAuditDigest(payload.childAuditDigest);
+  if (
+    comments.length === 0 &&
+    commentIds.length === 0 &&
+    childIssueSummaries.length === 0 &&
+    unresolvedBlockerIssueIds.length === 0 &&
+    unresolvedBlockerSummaries.length === 0 &&
+    !activeTreeHold &&
+    !executionStage &&
+    !continuationSummary &&
+    !livenessContinuation &&
+    !childAuditDigest &&
+    !normalizePaperclipWakeIssue(payload.issue)
+  ) {
     return null;
   }
 
@@ -606,6 +694,7 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
     interactionStatus: asString(payload.interactionStatus, "").trim() || null,
     childIssueSummaries,
     childIssueSummaryTruncated: asBoolean(payload.childIssueSummaryTruncated, false),
+    childAuditDigest,
     commentIds,
     latestCommentId: asString(payload.latestCommentId, "").trim() || null,
     comments,
@@ -818,6 +907,39 @@ export function renderPaperclipWakePrompt(
     }
     if (normalized.childIssueSummaryTruncated) {
       lines.push("[child issue summaries truncated]");
+    }
+  }
+
+  if (normalized.childAuditDigest && normalized.childAuditDigest.blockedChildren.length > 0) {
+    const digest = normalized.childAuditDigest;
+    const scannedAt = digest.scannedAt ?? "unknown";
+    lines.push("", `## Blocked children (in_review parent audit · scanned ${scannedAt})`);
+    lines.push("", `Total blocked: ${digest.blockedChildrenTotal} (showing ${digest.blockedChildren.length})`);
+    lines.push("");
+    for (const entry of digest.blockedChildren) {
+      const label = entry.identifier ?? entry.id ?? "unknown";
+      const titleSegment = entry.title ? ` «${entry.title}»` : "";
+      const assigneeSegment = entry.assigneeAgentId
+        ? `agent ${entry.assigneeAgentId}`
+        : entry.assigneeUserId
+          ? `user ${entry.assigneeUserId}`
+          : "unassigned";
+      const ageSegment = typeof entry.ageHours === "number" ? `${entry.ageHours}h` : "unknown";
+      const routingFlag = entry.routingAskDetected ? " · 🚨 routing-ask detected" : "";
+      lines.push(
+        `- **${label}**${titleSegment} — assignee: ${assigneeSegment} · age: ${ageSegment}${routingFlag}`,
+      );
+      if (entry.latestCommentPreview) {
+        const author = entry.latestCommentAuthorId
+          ? `${entry.latestCommentAuthorType ?? "unknown"} · ${entry.latestCommentAuthorId}`
+          : entry.latestCommentAuthorType ?? "unknown";
+        lines.push(`  Last comment (${author}): "${entry.latestCommentPreview}"`);
+      }
+    }
+    if (digest.blockedChildrenListTruncated) {
+      const remaining = Math.max(0, digest.blockedChildrenTotal - digest.blockedChildren.length);
+      lines.push("");
+      lines.push(`> +${remaining} more blocked children not shown (cap reached).`);
     }
   }
 
