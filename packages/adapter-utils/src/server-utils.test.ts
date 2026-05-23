@@ -747,6 +747,120 @@ describe("renderPaperclipWakePrompt", () => {
     expect(prompt).toContain("PAP-101 Implement helper (done)");
     expect(prompt).toContain("Added the helper route and tests.");
   });
+
+  it("renders blocked-children audit digest with routing-ask flag and truncation footer", () => {
+    const payload = {
+      reason: "issue_assigned",
+      issue: {
+        id: "parent-2",
+        identifier: "PRE-867",
+        title: "in_review parent",
+        status: "in_review",
+        priority: "high",
+      },
+      childAuditDigest: {
+        blockedChildren: [
+          {
+            id: "child-a",
+            identifier: "PRE-869",
+            title: "Review programs page billing",
+            status: "blocked",
+            priority: "high",
+            assigneeAgentId: "agent-claude",
+            assigneeUserId: null,
+            updatedAt: "2026-05-22T22:00:00.000Z",
+            ageHours: 16,
+            latestCommentPreview:
+              "CEO PATCH assigneeAgentId required for reviewer swap",
+            latestCommentPreviewTruncated: false,
+            latestCommentAuthorType: "agent",
+            latestCommentAuthorId: "agent-cto",
+            latestCommentCreatedAt: "2026-05-23T13:00:00.000Z",
+            routingAskDetected: true,
+          },
+          {
+            id: "child-b",
+            identifier: "PRE-870",
+            title: "Quiet blocked child",
+            status: "blocked",
+            priority: "medium",
+            assigneeAgentId: "agent-glm",
+            assigneeUserId: null,
+            updatedAt: "2026-05-23T08:00:00.000Z",
+            ageHours: 6,
+            latestCommentPreview: null,
+            latestCommentPreviewTruncated: false,
+            latestCommentAuthorType: null,
+            latestCommentAuthorId: null,
+            latestCommentCreatedAt: null,
+            routingAskDetected: false,
+          },
+        ],
+        blockedChildrenTotal: 12,
+        blockedChildrenListTruncated: true,
+        scannedAt: "2026-05-23T14:22:00.000Z",
+      },
+    };
+
+    const serialized = JSON.parse(stringifyPaperclipWakePayload(payload) ?? "{}");
+    expect(serialized.childAuditDigest.blockedChildren).toHaveLength(2);
+    expect(serialized.childAuditDigest.blockedChildrenTotal).toBe(12);
+    expect(serialized.childAuditDigest.blockedChildrenListTruncated).toBe(true);
+    expect(serialized.childAuditDigest.blockedChildren[0].routingAskDetected).toBe(true);
+
+    const prompt = renderPaperclipWakePrompt(payload);
+    expect(prompt).toContain(
+      "## Blocked children (in_review parent audit · scanned 2026-05-23T14:22:00.000Z)",
+    );
+    expect(prompt).toContain("Total blocked: 12 (showing 2)");
+    expect(prompt).toContain(
+      "- **PRE-869** «Review programs page billing» — assignee: agent agent-claude · age: 16h · 🚨 routing-ask detected",
+    );
+    expect(prompt).toContain(
+      'Last comment (agent · agent-cto): "CEO PATCH assigneeAgentId required for reviewer swap"',
+    );
+    expect(prompt).toContain(
+      "- **PRE-870** «Quiet blocked child» — assignee: agent agent-glm · age: 6h",
+    );
+    expect(prompt).not.toContain(
+      "- **PRE-870** «Quiet blocked child» — assignee: agent agent-glm · age: 6h · 🚨",
+    );
+    expect(prompt).toContain("> +10 more blocked children not shown (cap reached).");
+  });
+
+  it("omits blocked-children section when digest is empty or absent", () => {
+    const payloadWithEmptyDigest = {
+      reason: "issue_assigned",
+      issue: {
+        id: "parent-3",
+        identifier: "PRE-900",
+        title: "Healthy parent",
+        status: "in_review",
+        priority: "medium",
+      },
+      childAuditDigest: {
+        blockedChildren: [],
+        blockedChildrenTotal: 0,
+        blockedChildrenListTruncated: false,
+        scannedAt: "2026-05-23T14:30:00.000Z",
+      },
+    };
+    const prompt = renderPaperclipWakePrompt(payloadWithEmptyDigest);
+    expect(prompt).not.toContain("## Blocked children");
+
+    const payloadWithoutDigest = {
+      reason: "issue_assigned",
+      issue: {
+        id: "parent-4",
+        identifier: "PRE-901",
+        title: "No-digest parent",
+        status: "in_progress",
+        priority: "medium",
+      },
+    };
+    const promptWithoutDigest = renderPaperclipWakePrompt(payloadWithoutDigest);
+    expect(promptWithoutDigest).not.toContain("## Blocked children");
+  });
 });
 
 describe("applyPaperclipWorkspaceEnv", () => {

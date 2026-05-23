@@ -1939,7 +1939,7 @@ export function mergeCoalescedContextSnapshot(
   return merged;
 }
 
-async function buildPaperclipWakePayload(input: {
+export async function buildPaperclipWakePayload(input: {
   db: Db;
   companyId: string;
   contextSnapshot: Record<string, unknown>;
@@ -1983,6 +1983,11 @@ async function buildPaperclipWakePayload(input: {
           .then((rows) => rows[0] ?? null)
       : null);
   if (commentIds.length === 0 && Object.keys(executionStage).length === 0 && !issueSummary) return null;
+
+  const childAuditDigest =
+    issueSummary && issueSummary.status === "in_review"
+      ? await issueService(input.db).getInReviewParentChildAudit(issueSummary.id, input.companyId)
+      : null;
 
   const commentRows =
     commentIds.length === 0
@@ -2070,6 +2075,7 @@ async function buildPaperclipWakePayload(input: {
       ? input.contextSnapshot.childIssueSummaries
       : [],
     childIssueSummaryTruncated: input.contextSnapshot.childIssueSummaryTruncated === true,
+    childAuditDigest,
     livenessContinuation: readNonEmptyString(input.contextSnapshot.livenessContinuationState) ||
       readNonEmptyString(input.contextSnapshot.livenessContinuationInstruction) ||
       readNonEmptyString(input.contextSnapshot.livenessContinuationSourceRunId) ||
