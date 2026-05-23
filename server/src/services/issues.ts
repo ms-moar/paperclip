@@ -79,6 +79,7 @@ import {
   RECOVERY_ORIGIN_KINDS,
 } from "./recovery/origins.js";
 import { classifyIssueGraphLiveness, type IssueLivenessFinding } from "./recovery/issue-graph-liveness.js";
+import { detectRoutingAsk } from "../lib/routing-ask-patterns.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -88,6 +89,8 @@ const ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE = 500;
 export const MAX_CHILD_ISSUES_CREATED_BY_HELPER = 25;
 const MAX_CHILD_COMPLETION_SUMMARIES = 20;
 const CHILD_COMPLETION_SUMMARY_BODY_MAX_CHARS = 500;
+const MAX_BLOCKED_CHILD_AUDIT_ROWS = 10;
+const MAX_BLOCKED_COMMENT_PREVIEW_CHARS = 200;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_MAX_LOG_BYTES = 2_000_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_CHUNK_BYTES = 256_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_END_SLACK_MS = 60_000;
@@ -333,6 +336,36 @@ export type ChildIssueCompletionSummary = {
   assigneeUserId: string | null;
   updatedAt: Date;
   summary: string | null;
+};
+
+/**
+ * One blocked direct child of an `in_review` parent, surfaced in the wake
+ * payload's `childAuditDigest` so a triaging agent (typically CEO) sees
+ * routing-asks without an extra fetch. See `getInReviewParentChildAudit`.
+ */
+export type InReviewBlockedChildAuditEntry = {
+  id: string;
+  identifier: string | null;
+  title: string;
+  status: string;
+  priority: string;
+  assigneeAgentId: string | null;
+  assigneeUserId: string | null;
+  updatedAt: string;
+  ageHours: number;
+  latestCommentPreview: string | null;
+  latestCommentPreviewTruncated: boolean;
+  latestCommentAuthorType: string | null;
+  latestCommentAuthorId: string | null;
+  latestCommentCreatedAt: string | null;
+  routingAskDetected: boolean;
+};
+
+export type InReviewChildAuditDigest = {
+  blockedChildren: InReviewBlockedChildAuditEntry[];
+  blockedChildrenTotal: number;
+  blockedChildrenListTruncated: boolean;
+  scannedAt: string;
 };
 
 function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
@@ -4019,6 +4052,148 @@ export function issueService(db: Db) {
         childIssueIds: children.map((child) => child.id),
         childIssueSummaries,
         childIssueSummaryTruncated: children.length > childIssueSummaries.length,
+      };
+    },
+
+    /**
+     * Build the `childAuditDigest` for an `in_review` parent's wake payload
+     * (PRE-896 / PRE-898). Returns:
+     *
+     *   - `null` when the parent is missing, the company id doesn't match, the
+     *     status changed off `in_review` between wake enqueue and prep, or
+     *     there are no `blocked` direct children. `null` is the explicit
+     *     "no audit needed" signal — callers don't have to differentiate "no
+     *     digest" from "digest with empty list".
+     *   - `InReviewChildAuditDigest` otherwise — capped at
+     *     `MAX_BLOCKED_CHILD_AUDIT_ROWS`, with `blockedChildrenTotal` reflecting
+     *     the unfiltered count.
+     *
+     * Cost budget: 1 children list query + 1 count query + 1 comments-by-id
+     * query (skipped if there are no rows). Worst case ~3 queries on the
+     * `issues_parent_id_status` + `issue_comments_issue_id_created_at_idx`
+     * indexes — sub-millisecond on the wake-prep critical path.
+     */
+    getInReviewParentChildAudit: async (
+      parentIssueId: string,
+      companyId: string,
+    ): Promise<InReviewChildAuditDigest | null> => {
+      const parent = await db
+        .select({
+          id: issues.id,
+          companyId: issues.companyId,
+          status: issues.status,
+        })
+        .from(issues)
+        .where(eq(issues.id, parentIssueId))
+        .then((rows) => rows[0] ?? null);
+      if (!parent) return null;
+      if (parent.companyId !== companyId) return null;
+      if (parent.status !== "in_review") return null;
+
+      const blockedPredicate = and(
+        eq(issues.companyId, parent.companyId),
+        eq(issues.parentId, parent.id),
+        eq(issues.status, "blocked"),
+      );
+
+      const [children, totalRow] = await Promise.all([
+        db
+          .select({
+            id: issues.id,
+            identifier: issues.identifier,
+            title: issues.title,
+            status: issues.status,
+            priority: issues.priority,
+            assigneeAgentId: issues.assigneeAgentId,
+            assigneeUserId: issues.assigneeUserId,
+            updatedAt: issues.updatedAt,
+          })
+          .from(issues)
+          .where(blockedPredicate)
+          .orderBy(asc(issues.updatedAt), asc(issues.issueNumber))
+          .limit(MAX_BLOCKED_CHILD_AUDIT_ROWS),
+        db
+          .select({ total: sql<number>`count(*)::int` })
+          .from(issues)
+          .where(blockedPredicate)
+          .then((rows) => rows[0] ?? { total: 0 }),
+      ]);
+
+      if (children.length === 0) return null;
+
+      const childIds = children.map((child) => child.id);
+      const commentRows = await db
+        .select({
+          issueId: issueComments.issueId,
+          body: issueComments.body,
+          authorType: issueComments.authorType,
+          authorAgentId: issueComments.authorAgentId,
+          authorUserId: issueComments.authorUserId,
+          createdAt: issueComments.createdAt,
+        })
+        .from(issueComments)
+        .where(
+          and(
+            eq(issueComments.companyId, parent.companyId),
+            inArray(issueComments.issueId, childIds),
+          ),
+        )
+        .orderBy(desc(issueComments.createdAt), desc(issueComments.id));
+
+      const latestCommentByIssueId = new Map<string, (typeof commentRows)[number]>();
+      for (const comment of commentRows) {
+        if (!latestCommentByIssueId.has(comment.issueId)) {
+          latestCommentByIssueId.set(comment.issueId, comment);
+        }
+      }
+
+      const scannedAtDate = new Date();
+      const scannedAtMs = scannedAtDate.getTime();
+
+      const blockedChildren: InReviewBlockedChildAuditEntry[] = children.map((child) => {
+        const latest = latestCommentByIssueId.get(child.id) ?? null;
+        const body = latest?.body ?? null;
+        const trimmedBody = body?.trim() ?? "";
+        const fullBody = trimmedBody.length > 0 ? trimmedBody : null;
+        const preview = fullBody
+          ? fullBody.length > MAX_BLOCKED_COMMENT_PREVIEW_CHARS
+            ? `${fullBody.slice(0, MAX_BLOCKED_COMMENT_PREVIEW_CHARS).trimEnd()}…`
+            : fullBody
+          : null;
+        const previewTruncated = !!fullBody && fullBody.length > MAX_BLOCKED_COMMENT_PREVIEW_CHARS;
+        const ageMs = Math.max(0, scannedAtMs - child.updatedAt.getTime());
+        const ageHours = Math.floor(ageMs / 3_600_000);
+        const inferredAuthorType =
+          latest?.authorType ??
+          (latest?.authorAgentId ? "agent" : latest?.authorUserId ? "user" : latest ? "system" : null);
+        const inferredAuthorId = latest?.authorAgentId ?? latest?.authorUserId ?? null;
+
+        return {
+          id: child.id,
+          identifier: child.identifier,
+          title: child.title,
+          status: child.status,
+          priority: child.priority,
+          assigneeAgentId: child.assigneeAgentId,
+          assigneeUserId: child.assigneeUserId,
+          updatedAt: child.updatedAt.toISOString(),
+          ageHours,
+          latestCommentPreview: preview,
+          latestCommentPreviewTruncated: previewTruncated,
+          latestCommentAuthorType: inferredAuthorType,
+          latestCommentAuthorId: inferredAuthorId,
+          latestCommentCreatedAt: latest?.createdAt.toISOString() ?? null,
+          routingAskDetected: detectRoutingAsk(fullBody),
+        };
+      });
+
+      const blockedChildrenTotal = totalRow.total ?? blockedChildren.length;
+
+      return {
+        blockedChildren,
+        blockedChildrenTotal,
+        blockedChildrenListTruncated: blockedChildrenTotal > blockedChildren.length,
+        scannedAt: scannedAtDate.toISOString(),
       };
     },
 
