@@ -31,7 +31,6 @@ import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
 import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
-import { usePluginLaunchers } from "@/plugins/launchers";
 
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
@@ -140,53 +139,5 @@ export function Sidebar() {
         />
       </nav>
     </aside>
-  );
-}
-
-const launcherIconMap: Record<string, typeof MessageCircle> = {
-  chat: MessageCircle,
-};
-
-function SidebarPluginLaunchers({
-  companyId,
-  prefix,
-}: {
-  companyId: string | null;
-  prefix: string | null;
-}) {
-  const { launchers } = usePluginLaunchers({
-    placementZones: ["sidebar"],
-    companyId,
-    enabled: !!companyId,
-  });
-
-  if (launchers.length === 0) return null;
-
-  return (
-    <>
-      {launchers.map((launcher) => {
-        const icon = launcherIconMap[launcher.id?.replace(/-nav$/, "")] ?? MessageCircle;
-        const target = launcher.action?.type === "navigate" ? launcher.action.target : null;
-        if (!target) return null;
-        // Plugin authors write /plugins/<pluginKey> but the React route binds
-        // :pluginId to the UUID; rewrite key -> UUID so PluginPage can resolve it.
-        const rewritten = target.replace(
-          new RegExp(`^/plugins/${launcher.pluginKey}(?=/|$)`),
-          `/plugins/${launcher.pluginId}`,
-        );
-        const to =
-          prefix && rewritten.startsWith("/") && !rewritten.startsWith(`/${prefix}`)
-            ? `/${prefix}${rewritten}`
-            : rewritten;
-        return (
-          <SidebarNavItem
-            key={`${launcher.pluginKey}:${launcher.id}`}
-            to={to}
-            label={launcher.displayName}
-            icon={icon}
-          />
-        );
-      })}
-    </>
   );
 }
