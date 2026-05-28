@@ -1,5 +1,5 @@
 diff --git a/dist/server/execute.js b/dist/server/execute.js
-index 93cddf8243271f5fb3ab101617f9114257e41328..06b41c5624d9cb8cd0ee786e335a83dc5ef6c98a 100644
+index 93cddf8243271f5fb3ab101617f9114257e41328..f32c3ea453a6a8f815f31b357f392225de8fcf7f 100644
 --- a/dist/server/execute.js
 +++ b/dist/server/execute.js
 @@ -140,8 +140,22 @@ function buildPrompt(ctx, config) {
@@ -27,11 +27,41 @@ index 93cddf8243271f5fb3ab101617f9114257e41328..06b41c5624d9cb8cd0ee786e335a83dc
  /** Regex to extract token usage from Hermes output. */
  const TOKEN_USAGE_REGEX = /tokens?[:\s]+(\d+)\s*(?:input|in)\b.*?(\d+)\s*(?:output|out)\b/i;
  /** Regex to extract cost from Hermes output. */
-@@ -379,11 +393,42 @@ export async function execute(ctx) {
+@@ -379,11 +393,72 @@ export async function execute(ctx) {
          usage: parsed.usage || null,
          cost_usd: parsed.costUsd ?? null,
      };
 -    // Store session ID for next run
++    // PRE-1070: classify non-success outcomes as transient_upstream so
++    // Paperclip schedules a bounded retry. Read by Paperclip backend in
++    // server/src/services/heartbeat.ts → readTransientRecoveryContractFromRun
++    // (checks resultJson.errorFamily and top-level errorFamily via
++    // mergeAdapterRecoveryMetadata) and triggers scheduleBoundedRetryForRun
++    // (BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS, default 3).
++    //
++    // Mike PRE-771 2026-05-28: most hermes_local failures are upstream LLM
++    // provider issues (Z.AI 503/overload, rate limits, connection drops) and
++    // recover after 1–2 retries. MAX_ATTEMPTS=3 gate prevents infinite loops
++    // on truly permanent failures (config errors, auth, etc.).
++    //
++    // Paperclip's bounded-retry only fires on outcome=failed, not outcome=
++    // timed_out (heartbeat.ts:8045). Convert adapter-side wall-clock timeouts
++    // into "failed" by clearing timedOut and preserving the timeout context
++    // in errorMessage so the retry path is reachable.
++    const __pre1070_exit = result.exitCode ?? 0;
++    const __pre1070_nonSuccess = __pre1070_exit !== 0 || result.timedOut === true || Boolean(parsed.errorMessage);
++    if (__pre1070_nonSuccess) {
++        executionResult.errorFamily = "transient_upstream";
++        executionResult.errorCode = "hermes_transient_upstream";
++        executionResult.resultJson.errorFamily = "transient_upstream";
++        if (result.timedOut === true) {
++            executionResult.timedOut = false;
++            const __pre1070_timeoutMsg = `Hermes timed out after ${timeoutSec}s`;
++            executionResult.errorMessage = executionResult.errorMessage
++                ? `${__pre1070_timeoutMsg}: ${executionResult.errorMessage}`
++                : __pre1070_timeoutMsg;
++        }
++    }
 +    // PRE-1066 Bug C: detect "Session not found" in stderr → clearSession=true.
 +    // If hermes rejected the resumed id, Paperclip must drop it from
 +    // agent_runtime_state, otherwise every subsequent wake re-uses the same
@@ -68,24 +98,4 @@ index 93cddf8243271f5fb3ab101617f9114257e41328..06b41c5624d9cb8cd0ee786e335a83dc
 +export const __testing__ = {
 +    parseHermesOutput,
 +    isValidHermesSessionId,
-+    SESSION_ID_REGEX,
-+    SESSION_ID_REGEX_LEGACY,
-+    HERMES_SESSION_ID_SHAPE,
 +};
- //# sourceMappingURL=execute.js.map
-\ No newline at end of file
-diff --git a/dist/server/index.js b/dist/server/index.js
-index 881e4836b6737a47481002200b854e26da8f906c..5ff6337572a97c91bd33f848148e2e80e521ddc5 100644
---- a/dist/server/index.js
-+++ b/dist/server/index.js
-@@ -5,6 +5,10 @@ export { execute } from "./execute.js";
- export { testEnvironment } from "./test.js";
- export { detectModel } from "./detect-model.js";
- export { listHermesSkills as listSkills, syncHermesSkills as syncSkills, resolveHermesDesiredSkillNames as resolveDesiredSkillNames, } from "./skills.js";
-+// PRE-1066: re-export __testing__ so the patch's unit tests can reach
-+// the pure parser/validator helpers via the public `./server` entry
-+// point (the package `exports` field blocks deep imports otherwise).
-+export { __testing__ } from "./execute.js";
- function readNonEmptyString(value) {
-     return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
- }
