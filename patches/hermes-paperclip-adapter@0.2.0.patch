@@ -1,0 +1,91 @@
+diff --git a/dist/server/execute.js b/dist/server/execute.js
+index 93cddf8243271f5fb3ab101617f9114257e41328..06b41c5624d9cb8cd0ee786e335a83dc5ef6c98a 100644
+--- a/dist/server/execute.js
++++ b/dist/server/execute.js
+@@ -140,8 +140,22 @@ function buildPrompt(ctx, config) {
+ // ---------------------------------------------------------------------------
+ /** Regex to extract session ID from Hermes quiet-mode output: "session_id: <id>" */
+ const SESSION_ID_REGEX = /^session_id:\s*(\S+)/m;
+-/** Regex for legacy session output format */
+-const SESSION_ID_REGEX_LEGACY = /session[_ ](?:id|saved)[:\s]+([a-zA-Z0-9_-]+)/i;
++/**
++ * PRE-1066 fix: Regex for legacy session output format.
++ * Anchored at line start (`^...`) and constrained to hermes id shape
++ * (`YYYYMMDD_HHMMSS_<hex>`) so error help text like
++ * "session ID from a previous CLI run" cannot match and capture "from".
++ */
++const SESSION_ID_REGEX_LEGACY = /^[ \t]*session[_ ](?:id|saved)[:\s]+(\d{8}_\d{6}_[a-f0-9]+)\b/im;
++/**
++ * PRE-1066 fix: Canonical hermes session id shape.
++ * Used as a post-parse validator: anything that does not match this is
++ * treated as a corrupt parse and dropped before persistence.
++ */
++const HERMES_SESSION_ID_SHAPE = /^[0-9]{8}_[0-9]{6}_[a-f0-9]+$/;
++function isValidHermesSessionId(id) {
++    return typeof id === "string" && HERMES_SESSION_ID_SHAPE.test(id);
++}
+ /** Regex to extract token usage from Hermes output. */
+ const TOKEN_USAGE_REGEX = /tokens?[:\s]+(\d+)\s*(?:input|in)\b.*?(\d+)\s*(?:output|out)\b/i;
+ /** Regex to extract cost from Hermes output. */
+@@ -379,11 +393,42 @@ export async function execute(ctx) {
+         usage: parsed.usage || null,
+         cost_usd: parsed.costUsd ?? null,
+     };
+-    // Store session ID for next run
++    // PRE-1066 Bug C: detect "Session not found" in stderr → clearSession=true.
++    // If hermes rejected the resumed id, Paperclip must drop it from
++    // agent_runtime_state, otherwise every subsequent wake re-uses the same
++    // poisoned id and loops forever.
++    const stderrText = (result.stderr || "");
++    if (/Session not found/i.test(stderrText)) {
++        executionResult.clearSession = true;
++    }
++    // Store session ID for next run.
++    // PRE-1066 Bug A: no `.slice(0, 16)` — hermes ids are 22 chars
++    //   (`YYYYMMDD_HHMMSS_<6-hex>`); truncating destroys --resume because
++    //   the on-disk session file is keyed by the full id.
++    // PRE-1066 validator: reject any parsed session id whose shape does not
++    //   match HERMES_SESSION_ID_SHAPE (e.g. legacy-regex false positives like
++    //   "from", or partial captures like "20260527_115456_") so they never
++    //   reach agent_runtime_state.session_id.
+     if (persistSession && parsed.sessionId) {
+-        executionResult.sessionParams = { sessionId: parsed.sessionId };
+-        executionResult.sessionDisplayId = parsed.sessionId.slice(0, 16);
++        if (isValidHermesSessionId(parsed.sessionId)) {
++            executionResult.sessionParams = { sessionId: parsed.sessionId };
++            executionResult.sessionDisplayId = parsed.sessionId;
++        }
++        else {
++            await ctx.onLog("stderr", `[hermes] PRE-1066: dropping malformed session_id "${parsed.sessionId}" (expected YYYYMMDD_HHMMSS_<hex>)\n`);
++            // Also clear any previously stored session — the next run should
++            // start fresh rather than try to resume something corrupt.
++            executionResult.clearSession = true;
++        }
+     }
+     return executionResult;
+ }
++// PRE-1066: exported for unit tests.
++export const __testing__ = {
++    parseHermesOutput,
++    isValidHermesSessionId,
++    SESSION_ID_REGEX,
++    SESSION_ID_REGEX_LEGACY,
++    HERMES_SESSION_ID_SHAPE,
++};
+ //# sourceMappingURL=execute.js.map
+\ No newline at end of file
+diff --git a/dist/server/index.js b/dist/server/index.js
+index 881e4836b6737a47481002200b854e26da8f906c..5ff6337572a97c91bd33f848148e2e80e521ddc5 100644
+--- a/dist/server/index.js
++++ b/dist/server/index.js
+@@ -5,6 +5,10 @@ export { execute } from "./execute.js";
+ export { testEnvironment } from "./test.js";
+ export { detectModel } from "./detect-model.js";
+ export { listHermesSkills as listSkills, syncHermesSkills as syncSkills, resolveHermesDesiredSkillNames as resolveDesiredSkillNames, } from "./skills.js";
++// PRE-1066: re-export __testing__ so the patch's unit tests can reach
++// the pure parser/validator helpers via the public `./server` entry
++// point (the package `exports` field blocks deep imports otherwise).
++export { __testing__ } from "./execute.js";
+ function readNonEmptyString(value) {
+     return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+ }
