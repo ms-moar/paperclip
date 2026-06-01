@@ -1006,7 +1006,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       return result.data?.model ?? null;
                     }}
                 onRefreshModels={
-                  adapterType === "codex_local" || adapterType === "acpx_local"
+                  adapterType === "codex_local" || adapterType === "acpx_local" || adapterType === "pi_local"
                     ? handleRefreshModels
                     : undefined
                 }
