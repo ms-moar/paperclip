@@ -21,7 +21,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
-import { badRequest } from "../errors.js";
+import { badRequest, forbidden } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 export function parseCostDateRange(query: Record<string, unknown>) {
@@ -225,7 +225,14 @@ export function costRoutes(
   router.get("/companies/:companyId/costs/quota-windows", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    assertBoard(req);
+    if (req.actor.type === "agent") {
+      const agent = req.actor.agentId ? await agents.getById(req.actor.agentId) : null;
+      if (!agent || agent.companyId !== companyId || agent.permissions?.canReadQuotaWindows !== true) {
+        throw forbidden("Quota-window read permission required");
+      }
+    } else {
+      assertBoard(req);
+    }
     // validate companyId resolves to a real company so the "__none__" sentinel
     // and any forged ids are rejected before we touch provider credentials
     const company = await companies.getById(companyId);
