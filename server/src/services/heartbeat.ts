@@ -66,7 +66,11 @@ import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
-import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
+import {
+  resolveDefaultAgentWorkspaceDir,
+  resolveManagedProjectWorkspaceDir,
+  resolvePaperclipInstanceRoot,
+} from "../home-paths.js";
 import {
   buildHeartbeatRunIssueComment,
   HEARTBEAT_RUN_RESULT_OUTPUT_MAX_CHARS,
@@ -1048,6 +1052,53 @@ interface ParsedIssueAssigneeAdapterOverrides {
 
 type ModelProfileRequestSource = "issue_override" | "wake_context";
 type AppliedModelProfileConfigSource = "agent_runtime" | "adapter_default";
+
+const ADAPTERS_WITH_INSTRUCTIONS_FILE_FALLBACK = new Set([
+  "acpx_local",
+  "claude_local",
+  "codex_local",
+  "cursor_local",
+  "gemini_local",
+  "glm_local",
+  "opencode_local",
+  "pi_local",
+]);
+
+function hasConfiguredInstructionsFilePath(config: Record<string, unknown>): boolean {
+  return typeof config.instructionsFilePath === "string" && config.instructionsFilePath.trim().length > 0;
+}
+
+export function resolveDefaultCompanyAgentInstructionsPath(input: { companyId: string; agentId: string }): string {
+  return path.resolve(
+    resolvePaperclipInstanceRoot(),
+    "companies",
+    input.companyId,
+    "agents",
+    input.agentId,
+    "instructions",
+    "AGENTS.md",
+  );
+}
+
+export async function applyDefaultAgentInstructionsFilePath(input: {
+  agent: Pick<typeof agents.$inferSelect, "id" | "companyId" | "adapterType">;
+  config: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  if (hasConfiguredInstructionsFilePath(input.config)) return input.config;
+  if (!ADAPTERS_WITH_INSTRUCTIONS_FILE_FALLBACK.has(input.agent.adapterType)) return input.config;
+
+  const fallbackPath = resolveDefaultCompanyAgentInstructionsPath({
+    companyId: input.agent.companyId,
+    agentId: input.agent.id,
+  });
+  try {
+    await fs.access(fallbackPath);
+  } catch {
+    return input.config;
+  }
+
+  return { ...input.config, instructionsFilePath: fallbackPath };
+}
 
 export interface ModelProfileApplication {
   requested: ModelProfileKey | null;
@@ -7012,7 +7063,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       explicitResumeSessionParams ??
       (explicitResumeSessionDisplayId ? { sessionId: explicitResumeSessionDisplayId } : null) ??
       normalizeSessionParams(sessionCodec.deserialize(taskSessionForRun?.sessionParamsJson ?? null));
-    const config = parseObject(agent.adapterConfig);
+    const config = await applyDefaultAgentInstructionsFilePath({
+      agent,
+      config: parseObject(agent.adapterConfig),
+    });
     const requestedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
       projectPolicy: projectExecutionWorkspacePolicy,
       issueSettings: issueExecutionWorkspaceSettings,

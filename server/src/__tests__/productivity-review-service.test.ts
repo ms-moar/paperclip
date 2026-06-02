@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -204,10 +207,46 @@ describeEmbeddedPostgres("productivity review service", () => {
     expect(reviews[0]?.assigneeAdapterOverrides).toEqual({ modelProfile: "cheap" });
     expect(reviews[0]?.originId).toBe(seeded.issueId);
     expect(reviews[0]?.originFingerprint).toBe(`productivity-review:${seeded.issueId}`);
+    expect(reviews[0]?.title).toBe(`Review productivity for ${seeded.issuePrefix}-1`);
     expect(reviews[0]?.description).toContain("Primary trigger: `no_comment_streak`");
     expect(reviews[0]?.description).toContain("No-comment completed-run streak: 10");
 
     expect(await listRefreshComments(reviews[0]!.id)).toHaveLength(0);
+  });
+
+  it("uses the company Russian language policy for generated productivity review title and description", async () => {
+    const originalHome = process.env.PAPERCLIP_HOME;
+    const originalInstance = process.env.PAPERCLIP_INSTANCE_ID;
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-productivity-locale-"));
+    process.env.PAPERCLIP_HOME = home;
+    process.env.PAPERCLIP_INSTANCE_ID = "default";
+    try {
+      const now = new Date("2026-04-28T12:00:00.000Z");
+      const seeded = await seedAssignedIssue();
+      const policyPath = path.join(home, "instances", "default", "companies", seeded.companyId, "instructions", "LANGUAGE_POLICY.md");
+      await fs.mkdir(path.dirname(policyPath), { recursive: true });
+      await fs.writeFile(policyPath, "Всегда отвечай на русском языке.\n", "utf8");
+      await insertRuns({
+        companyId: seeded.companyId,
+        agentId: seeded.coderId,
+        issueId: seeded.issueId,
+        count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+        now,
+      });
+
+      const service = productivityReviewService(db);
+      await service.reconcileProductivityReviews({ now, companyId: seeded.companyId });
+
+      const reviews = await listProductivityReviews(seeded.companyId);
+      expect(reviews[0]?.title).toBe(`Проверить продуктивность для ${seeded.issuePrefix}-1`);
+      expect(reviews[0]?.description).toContain("## Источник");
+      expect(reviews[0]?.description).toContain("Основной триггер: `no_comment_streak` (серия запусков без комментариев)");
+    } finally {
+      if (originalHome === undefined) delete process.env.PAPERCLIP_HOME;
+      else process.env.PAPERCLIP_HOME = originalHome;
+      if (originalInstance === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+      else process.env.PAPERCLIP_INSTANCE_ID = originalInstance;
+    }
   });
 
   it("refreshes open productivity reviews only once per interval and caps refresh comments", async () => {

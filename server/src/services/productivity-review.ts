@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { clampIssueRequestDepth } from "@paperclipai/shared";
@@ -19,6 +21,7 @@ import {
   withRecoveryModelProfileHint,
 } from "./recovery/model-profile-hint.js";
 import { RECOVERY_ORIGIN_KINDS } from "./recovery/origins.js";
+import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 export const PRODUCTIVITY_REVIEW_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.issueProductivityReview;
 export const DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS = 10;
@@ -36,6 +39,7 @@ const ACTIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const MAX_CANDIDATE_ISSUES = 250;
 const MAX_RUNS_FOR_STREAK = 100;
 const MAX_PARENT_WALK_DEPTH = 25;
+const COMPANY_LANGUAGE_POLICY_FILE = "LANGUAGE_POLICY.md";
 export const PRODUCTIVITY_REVIEW_REFRESH_COMMENT_PREFIX = "Productivity review evidence refreshed.";
 
 type IssueRow = typeof issues.$inferSelect;
@@ -194,10 +198,37 @@ function isSoftStopTrigger(trigger: ProductivityReviewTrigger) {
   return trigger === "no_comment_streak" || trigger === "high_churn";
 }
 
-function formatTrigger(trigger: ProductivityReviewTrigger) {
+type ProductivityReviewLocale = "en" | "ru";
+
+function formatTrigger(trigger: ProductivityReviewTrigger, locale: ProductivityReviewLocale = "en") {
+  if (locale === "ru") {
+    if (trigger === "no_comment_streak") return "серия запусков без комментариев";
+    if (trigger === "high_churn") return "высокая частота запусков";
+    return "долгое активное выполнение";
+  }
   if (trigger === "no_comment_streak") return "No-comment streak";
   if (trigger === "high_churn") return "High churn";
   return "Long active duration";
+}
+
+function buildProductivityReviewTitle(evidence: ProductivityReviewEvidence, locale: ProductivityReviewLocale) {
+  const source = evidence.sourceIssue.identifier ?? evidence.sourceIssue.title;
+  return locale === "ru" ? `Проверить продуктивность для ${source}` : `Review productivity for ${source}`;
+}
+
+function resolveCompanyLanguagePolicyPath(companyId: string): string {
+  return path.resolve(
+    resolvePaperclipInstanceRoot(),
+    "companies",
+    companyId,
+    "instructions",
+    COMPANY_LANGUAGE_POLICY_FILE,
+  );
+}
+
+async function resolveProductivityReviewLocale(companyId: string): Promise<ProductivityReviewLocale> {
+  const policy = await fs.readFile(resolveCompanyLanguagePolicyPath(companyId), "utf8").catch(() => "");
+  return /русск|russian/i.test(policy) ? "ru" : "en";
 }
 
 export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: EnqueueWakeup }) {
@@ -556,20 +587,72 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
     return null;
   }
 
-  function buildReviewMarkdown(evidence: ProductivityReviewEvidence, prefix: string) {
+  function buildReviewMarkdown(evidence: ProductivityReviewEvidence, prefix: string, locale: ProductivityReviewLocale) {
     const latestRuns = evidence.latestRuns.length > 0
       ? evidence.latestRuns.map((run) =>
-        `- ${runUiLink(run, prefix)} \`${run.status}\` liveness \`${run.livenessState ?? "unknown"}\`, created ${run.createdAt.toISOString()}${run.nextAction ? `, next action: ${truncateInline(run.nextAction, 160)}` : ""}`,
+        locale === "ru"
+          ? `- ${runUiLink(run, prefix)} \`${run.status}\`, liveness \`${run.livenessState ?? "unknown"}\`, создано ${run.createdAt.toISOString()}${run.nextAction ? `, следующее действие: ${truncateInline(run.nextAction, 160)}` : ""}`
+          : `- ${runUiLink(run, prefix)} \`${run.status}\` liveness \`${run.livenessState ?? "unknown"}\`, created ${run.createdAt.toISOString()}${run.nextAction ? `, next action: ${truncateInline(run.nextAction, 160)}` : ""}`,
       ).join("\n")
-      : "- none";
+      : locale === "ru" ? "- нет" : "- none";
     const latestComments = evidence.latestComments.length > 0
       ? evidence.latestComments.map((comment) =>
         `- ${comment.createdAt.toISOString()}${comment.createdByRunId ? ` run \`${comment.createdByRunId}\`` : ""}: ${truncateInline(comment.body)}`,
       ).join("\n")
-      : "- none";
+      : locale === "ru" ? "- нет" : "- none";
     const usage = evidence.usageSamples.length > 0
       ? evidence.usageSamples.map((sample) => `- \`${sample.runId}\`: \`${JSON.stringify(sample.usageJson).slice(0, 500)}\``).join("\n")
-      : "- no usage payloads on sampled runs";
+      : locale === "ru" ? "- usage payloads в выбранных запусках отсутствуют" : "- no usage payloads on sampled runs";
+    if (locale === "ru") {
+      return [
+        "Paperclip обнаружил необычный паттерн продуктивности/прогресса по назначенной задаче.",
+        "",
+        "## Источник",
+        "",
+        `- Исходная задача: ${issueUiLink(evidence.sourceIssue, prefix)}`,
+        `- Назначенный агент: ${evidence.sourceAgent.name} (${evidence.sourceAgent.role})`,
+        `- Основной триггер: \`${evidence.trigger}\` (${formatTrigger(evidence.trigger, locale)})`,
+        `- Причины триггера: ${evidence.triggerReasons.join("; ")}`,
+        `- Сгенерировано: ${evidence.generatedAt.toISOString()}`,
+        "",
+        "## Доказательства",
+        "",
+        `- Всего выбранных запусков по задаче: ${evidence.totalRunCount}`,
+        `- Терминальных выбранных запусков: ${evidence.terminalRunCount}`,
+        `- Активных queued/running/scheduled запусков: ${evidence.activeRunCount}`,
+        `- Серия completed-run без комментариев: ${evidence.noCommentStreak}`,
+        `- Текущая длительность активного запуска: ${msToHuman(evidence.elapsedMs)}`,
+        `- Запуски в скользящих окнах: ${evidence.runCountLastHour}/1h, ${evidence.runCountLastSixHours}/6h`,
+        `- Комментарии назначенного агента total/window: ${evidence.commentCount} total, ${evidence.commentCountLastHour}/1h, ${evidence.commentCountLastSixHours}/6h`,
+        `- Cost events total: ${evidence.costCents} cents`,
+        `- Текущее следующее действие: ${evidence.nextAction ? truncateInline(evidence.nextAction, 500) : "не записано"}`,
+        "",
+        "## Пороги",
+        "",
+        `- Серия без комментариев: ${evidence.thresholds.noCommentStreakRuns} completed runs`,
+        `- Долгое активное выполнение: ${msToHuman(evidence.thresholds.longActiveMs)}`,
+        `- Высокая частота запусков: ${evidence.thresholds.highChurnHourly}/1h или ${evidence.thresholds.highChurnSixHours}/6h runs/comments`,
+        `- Resolved-review snooze: ${msToHuman(evidence.thresholds.resolvedSnoozeMs)}`,
+        "",
+        "## Последние запуски",
+        "",
+        latestRuns,
+        "",
+        "## Последние комментарии назначенного агента",
+        "",
+        latestComments,
+        "",
+        "## Usage samples",
+        "",
+        usage,
+        "",
+        "## Решение менеджера",
+        "",
+        "- Закрыть как продуктивное, если такой паттерн ожидаем.",
+        "- Продолжить с snooze-окном, если текущая работа должна идти без повторного review-spam.",
+        "- Запросить декомпозицию, переназначить, заблокировать с owner/action или остановить/отменить исходную работу, если она неэффективна.",
+      ].join("\n");
+    }
     return [
       "Paperclip detected an unusual productivity/progression pattern on an assigned issue.",
       "",
@@ -620,7 +703,19 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
     ].join("\n");
   }
 
-  function buildRefreshComment(evidence: ProductivityReviewEvidence, prefix: string) {
+  function buildRefreshComment(evidence: ProductivityReviewEvidence, prefix: string, locale: ProductivityReviewLocale) {
+    if (locale === "ru") {
+      return [
+        "Доказательства productivity review обновлены.",
+        "",
+        `- Исходная задача: ${issueUiLink(evidence.sourceIssue, prefix)}`,
+        `- Триггер: \`${evidence.trigger}\` (${formatTrigger(evidence.trigger, locale)})`,
+        `- Причины: ${evidence.triggerReasons.join("; ")}`,
+        `- Серия без комментариев: ${evidence.noCommentStreak}`,
+        `- Запуски/комментарии назначенного агента: ${evidence.runCountLastHour}/${evidence.commentCountLastHour} за 1h, ${evidence.runCountLastSixHours}/${evidence.commentCountLastSixHours} за 6h`,
+        `- Следующее действие: ${evidence.nextAction ? truncateInline(evidence.nextAction, 300) : "не записано"}`,
+      ].join("\n");
+    }
     return [
       "Productivity review evidence refreshed.",
       "",
@@ -637,6 +732,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
     evidence: ProductivityReviewEvidence,
     opts: { prefix: string; thresholds: ProductivityReviewThresholds },
   ) {
+    const locale = await resolveProductivityReviewLocale(evidence.sourceIssue.companyId);
     const existing = await findOpenProductivityReview(evidence.sourceIssue.companyId, evidence.sourceIssue.id);
     if (existing) {
       const refreshState = await getRefreshCommentState(evidence.sourceIssue.companyId, existing.id);
@@ -647,7 +743,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       ) {
         return { kind: "existing" as const, reviewIssueId: existing.id };
       }
-      await addRefreshComment(existing.id, buildRefreshComment(evidence, opts.prefix), evidence.generatedAt);
+      await addRefreshComment(existing.id, buildRefreshComment(evidence, opts.prefix, locale), evidence.generatedAt);
       await logActivity(db, {
         companyId: evidence.sourceIssue.companyId,
         actorType: "system",
@@ -682,8 +778,8 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
     let review: Awaited<ReturnType<typeof issuesSvc.create>>;
     try {
       review = await issuesSvc.create(evidence.sourceIssue.companyId, {
-        title: `Review productivity for ${evidence.sourceIssue.identifier ?? evidence.sourceIssue.title}`,
-        description: buildReviewMarkdown(evidence, opts.prefix),
+        title: buildProductivityReviewTitle(evidence, locale),
+        description: buildReviewMarkdown(evidence, opts.prefix, locale),
         status: "todo",
         priority: evidence.trigger === "long_active_duration" ? "medium" : "high",
         parentId: evidence.sourceIssue.id,
