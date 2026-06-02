@@ -12,6 +12,7 @@ import type {
 
 export interface AgentPermissions {
   canCreateAgents: boolean;
+  canReadQuotaWindows?: boolean;
 }
 
 export interface AgentModelProfileConfig {
