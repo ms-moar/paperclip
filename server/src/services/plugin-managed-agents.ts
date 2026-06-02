@@ -368,9 +368,14 @@ export function pluginManagedAgentService(
       return { entryFile: declared.entryFile, changedFiles: [declared.entryFile] };
     }
 
-    const paths = new Set([...Object.keys(declared.files), ...Object.keys(exported.files)]);
+    const declaredFiles = await instructions.applyCompanyLanguagePolicyOverlay(
+      agent,
+      declared.files,
+      declared.entryFile,
+    );
+    const paths = new Set([...Object.keys(declaredFiles), ...Object.keys(exported.files)]);
     const changedFiles = [...paths]
-      .filter((filePath) => (exported.files[filePath] ?? null) !== (declared.files[filePath] ?? null))
+      .filter((filePath) => (exported.files[filePath] ?? null) !== (declaredFiles[filePath] ?? null))
       .sort((left, right) => left.localeCompare(right));
     if (exported.entryFile !== declared.entryFile && !changedFiles.includes(declared.entryFile)) {
       changedFiles.unshift(declared.entryFile);

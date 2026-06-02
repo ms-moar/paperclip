@@ -4,6 +4,9 @@ import { notFound, unprocessable } from "../errors.js";
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 const ENTRY_FILE_DEFAULT = "AGENTS.md";
+const COMPANY_LANGUAGE_POLICY_FILE = "LANGUAGE_POLICY.md";
+const COMPANY_LANGUAGE_POLICY_START = "<!-- paperclip:company-language-policy:start -->";
+const COMPANY_LANGUAGE_POLICY_END = "<!-- paperclip:company-language-policy:end -->";
 const MODE_KEY = "instructionsBundleMode";
 const ROOT_KEY = "instructionsRootPath";
 const ENTRY_KEY = "instructionsEntryFile";
@@ -139,6 +142,38 @@ function resolveManagedInstructionsRoot(agent: AgentLike): string {
     agent.id,
     "instructions",
   );
+}
+
+function resolveCompanyLanguagePolicyPath(companyId: string): string {
+  return path.resolve(
+    resolvePaperclipInstanceRoot(),
+    "companies",
+    companyId,
+    "instructions",
+    COMPANY_LANGUAGE_POLICY_FILE,
+  );
+}
+
+function stripCompanyLanguagePolicyOverlay(content: string): string {
+  const start = content.indexOf(COMPANY_LANGUAGE_POLICY_START);
+  const end = content.indexOf(COMPANY_LANGUAGE_POLICY_END);
+  if (start === -1 || end === -1 || end < start) return content;
+  return content.slice(0, start) + content.slice(end + COMPANY_LANGUAGE_POLICY_END.length).replace(/^\s+/, "");
+}
+
+function prependCompanyLanguagePolicyOverlay(content: string, policy: string): string {
+  const trimmedPolicy = policy.trim();
+  if (!trimmedPolicy) return stripCompanyLanguagePolicyOverlay(content);
+  const body = stripCompanyLanguagePolicyOverlay(content).trimStart();
+  return [
+    COMPANY_LANGUAGE_POLICY_START,
+    "## Language policy (company default)",
+    "",
+    trimmedPolicy,
+    COMPANY_LANGUAGE_POLICY_END,
+    "",
+    body,
+  ].join("\n");
 }
 
 function resolveLegacyInstructionsPath(candidatePath: string, config: Record<string, unknown>): string {
@@ -682,6 +717,19 @@ export function agentInstructionsService() {
     };
   }
 
+  async function applyCompanyLanguagePolicyOverlay(
+    agent: AgentLike,
+    files: Record<string, string>,
+    entryFile: string,
+  ): Promise<Record<string, string>> {
+    const policy = await fs.readFile(resolveCompanyLanguagePolicyPath(agent.companyId), "utf8").catch(() => null);
+    if (policy === null) return files;
+    return {
+      ...files,
+      [entryFile]: prependCompanyLanguagePolicyOverlay(files[entryFile] ?? "", policy),
+    };
+  }
+
   async function materializeManagedBundle(
     agent: AgentLike,
     files: Record<string, string>,
@@ -693,13 +741,14 @@ export function agentInstructionsService() {
   ): Promise<{ bundle: AgentInstructionsBundle; adapterConfig: Record<string, unknown> }> {
     const rootPath = resolveManagedInstructionsRoot(agent);
     const entryFile = options?.entryFile ? normalizeRelativeFilePath(options.entryFile) : ENTRY_FILE_DEFAULT;
+    const effectiveFiles = await applyCompanyLanguagePolicyOverlay(agent, files, entryFile);
 
     if (options?.replaceExisting) {
       await fs.rm(rootPath, { recursive: true, force: true });
     }
     await fs.mkdir(rootPath, { recursive: true });
 
-    const normalizedEntries = Object.entries(files).map(([relativePath, content]) => [
+    const normalizedEntries = Object.entries(effectiveFiles).map(([relativePath, content]) => [
       normalizeRelativeFilePath(relativePath),
       content,
     ] as const);
@@ -731,5 +780,6 @@ export function agentInstructionsService() {
     exportFiles,
     ensureManagedBundle: ensureWritableBundle,
     materializeManagedBundle,
+    applyCompanyLanguagePolicyOverlay,
   };
 }

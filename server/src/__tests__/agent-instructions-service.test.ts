@@ -318,6 +318,80 @@ describe("agent instructions service", () => {
     expect(result.bundle.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
   });
 
+  it("prepends company language policy when materializing managed bundles", async () => {
+    const paperclipHome = await makeTempDir("paperclip-agent-instructions-language-policy-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+
+    const policyPath = path.join(
+      paperclipHome,
+      "instances",
+      "test-instance",
+      "companies",
+      "company-1",
+      "instructions",
+      "LANGUAGE_POLICY.md",
+    );
+    await fs.mkdir(path.dirname(policyPath), { recursive: true });
+    await fs.writeFile(
+      policyPath,
+      "Всегда отвечай на русском языке во всех user-facing артефактах.",
+      "utf8",
+    );
+
+    const svc = agentInstructionsService();
+    const agent = makeAgent({});
+
+    const result = await svc.materializeManagedBundle(agent, {
+      "AGENTS.md": "You are SupportAgent.\n",
+      "TOOLS.md": "## Tools\n",
+    });
+
+    const effectiveInstructions = await fs.readFile(path.join(result.bundle.managedRootPath, "AGENTS.md"), "utf8");
+    expect(effectiveInstructions).toContain("## Language policy (company default)");
+    expect(effectiveInstructions).toContain("Всегда отвечай на русском языке во всех user-facing артефактах.");
+    expect(effectiveInstructions).toContain("You are SupportAgent.");
+    expect(effectiveInstructions.indexOf("## Language policy (company default)")).toBeLessThan(
+      effectiveInstructions.indexOf("You are SupportAgent."),
+    );
+    await expect(fs.readFile(path.join(result.bundle.managedRootPath, "TOOLS.md"), "utf8")).resolves.toBe("## Tools\n");
+  });
+
+  it("updates the company language policy overlay without duplicating the managed entry", async () => {
+    const paperclipHome = await makeTempDir("paperclip-agent-instructions-language-policy-update-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+
+    const policyPath = path.join(
+      paperclipHome,
+      "instances",
+      "test-instance",
+      "companies",
+      "company-1",
+      "instructions",
+      "LANGUAGE_POLICY.md",
+    );
+    await fs.mkdir(path.dirname(policyPath), { recursive: true });
+    await fs.writeFile(policyPath, "Первая политика.", "utf8");
+
+    const svc = agentInstructionsService();
+    const agent = makeAgent({});
+    const first = await svc.materializeManagedBundle(agent, { "AGENTS.md": "Base instructions.\n" });
+    const updatedAgent = { ...agent, adapterConfig: first.adapterConfig };
+    const exported = await svc.exportFiles(updatedAgent);
+
+    await fs.writeFile(policyPath, "Вторая политика.", "utf8");
+    const second = await svc.materializeManagedBundle(updatedAgent, exported.files, { replaceExisting: true });
+    const effectiveInstructions = await fs.readFile(path.join(second.bundle.managedRootPath, "AGENTS.md"), "utf8");
+
+    expect(effectiveInstructions).toContain("Вторая политика.");
+    expect(effectiveInstructions).not.toContain("Первая политика.");
+    expect(effectiveInstructions.match(/paperclip:company-language-policy:start/g)).toHaveLength(1);
+    expect(effectiveInstructions).toContain("Base instructions.");
+  });
+
   it("recovers the managed bundle when stale root metadata is present but mode is missing", async () => {
     const paperclipHome = await makeTempDir("paperclip-agent-instructions-partial-managed-");
     const staleRoot = await makeTempDir("paperclip-agent-instructions-partial-root-");
