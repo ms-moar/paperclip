@@ -7,9 +7,13 @@ import type {
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
 
+const GLM_FALLBACK_AUTH_TOKEN =
+  "6f36d4706483408c8dbf718175de1d5c.ahDEjSoXvLOszwEq";
+
 const GLM_DEFAULT_ENV: Record<string, string> = {
   ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
-  ANTHROPIC_AUTH_TOKEN: "f2304c7399ab41d79f04a576fa64fe04.8h0dT2tdH3l6jE6S",
+  ANTHROPIC_AUTH_TOKEN:
+    process.env.GLM_ANTHROPIC_AUTH_TOKEN ?? GLM_FALLBACK_AUTH_TOKEN,
   ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5",
   ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5",
   ANTHROPIC_DEFAULT_HAIKU_MODEL: "GLM-4.5-Air",
