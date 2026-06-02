@@ -224,7 +224,7 @@ describe("issue execution policy routes", () => {
     };
     mockIssueService.getById.mockResolvedValue(issue);
     mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
-      { id: "interaction-1", kind: "request_confirmation", status: "pending" },
+      { id: "interaction-1", kind: "request_confirmation", status: "pending", continuationPolicy: "wake_assignee_on_accept" },
     ]);
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...issue,
@@ -246,6 +246,38 @@ describe("issue execution policy routes", () => {
       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       expect.objectContaining({ status: "in_review" }),
     );
+  });
+
+  it("rejects an agent-authored in_review transition with a pending interaction that has continuationPolicy=none", async () => {
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "todo",
+      assigneeAgentId: "33333333-3333-4333-8333-333333333333",
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1004b",
+      title: "Interaction with none continuation",
+      executionPolicy: null,
+      executionState: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
+      { id: "interaction-1", kind: "request_confirmation", status: "pending", continuationPolicy: "none" },
+    ]);
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      companyId: "company-1",
+      runId: "run-1",
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "in_review" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("invalid_issue_disposition");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
   it("allows an agent-authored in_review transition with a typed execution participant", async () => {

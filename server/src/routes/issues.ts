@@ -1163,7 +1163,7 @@ export function issueRoutes(
     })) return;
 
     const interactions = await issueThreadInteractionService(db).listForIssue(input.existing.id);
-    if (interactions.some((interaction) => interaction.status === "pending")) return;
+    if (interactions.some((interaction) => interaction.status === "pending" && interaction.continuationPolicy !== "none")) return;
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(input.existing.id);
     if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return;
