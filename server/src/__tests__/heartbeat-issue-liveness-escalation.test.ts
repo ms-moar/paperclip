@@ -10,6 +10,7 @@ import {
   createDb,
   executionWorkspaces,
   heartbeatRuns,
+  instanceSettings,
   issueComments,
   issueRelations,
   issueTreeHolds,
@@ -61,6 +62,7 @@ vi.mock("../adapters/index.ts", async () => {
 
 import { heartbeatService } from "../services/heartbeat.ts";
 import { instanceSettingsService } from "../services/instance-settings.ts";
+import { issueThreadInteractionService } from "../services/issue-thread-interactions.ts";
 import { runningProcesses } from "../adapters/index.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -115,6 +117,11 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
     await instanceSettingsService(db).updateExperimental({
       enableIssueGraphLivenessAutoRecovery: true,
     });
+  }
+
+  async function resetStoredExperimentalSettingsToDefaults() {
+    await instanceSettingsService(db).get();
+    await db.update(instanceSettings).set({ experimental: {}, updatedAt: new Date() });
   }
 
   async function seedBlockedChain(opts: {
@@ -205,6 +212,134 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
 
     return { companyId, managerId, coderId, blockedIssueId, blockerIssueId };
   }
+
+  it.each(["accepted", "rejected"] as const)(
+    "surfaces agent-owned in_review by default after a request_confirmation is %s",
+    async (resolution) => {
+      await resetStoredExperimentalSettingsToDefaults();
+      const companyId = randomUUID();
+      const managerId = randomUUID();
+      const coderId = randomUUID();
+      const reviewIssueId = randomUUID();
+      const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+      const issueTimestamp = new Date(Date.now() - 60 * 60 * 1000);
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix,
+        requireBoardApprovalForNewAgents: false,
+      });
+      await db.insert(agents).values([
+        {
+          id: managerId,
+          companyId,
+          name: "CTO",
+          role: "cto",
+          status: "idle",
+          adapterType: "codex_local",
+          adapterConfig: {},
+          runtimeConfig: { heartbeat: { wakeOnDemand: false } },
+          permissions: {},
+        },
+        {
+          id: coderId,
+          companyId,
+          name: "Coder",
+          role: "engineer",
+          status: "idle",
+          reportsTo: managerId,
+          adapterType: "codex_local",
+          adapterConfig: {},
+          runtimeConfig: { heartbeat: { wakeOnDemand: false } },
+          permissions: {},
+        },
+      ]);
+      await db.insert(issues).values({
+        id: reviewIssueId,
+        companyId,
+        title: "Review handoff awaiting confirmation",
+        status: "in_review",
+        priority: "medium",
+        assigneeAgentId: coderId,
+        issueNumber: 1,
+        identifier: `${issuePrefix}-1`,
+        createdAt: issueTimestamp,
+        updatedAt: issueTimestamp,
+      });
+      const interactions = issueThreadInteractionService(db);
+      const heartbeat = heartbeatService(db);
+
+      const confirmation = await interactions.create({
+        id: reviewIssueId,
+        companyId,
+      }, {
+        kind: "request_confirmation",
+        continuationPolicy: "wake_assignee_on_accept",
+        payload: {
+          version: 1,
+          prompt: "Approve the review handoff?",
+          acceptLabel: "Approve",
+          rejectLabel: "Request changes",
+        },
+      }, {
+        userId: "local-board",
+      });
+
+      const pending = await heartbeat.reconcileIssueGraphLiveness();
+      expect(pending.findings).toBe(0);
+      expect(pending.escalationsCreated).toBe(0);
+
+      if (resolution === "accepted") {
+        await interactions.acceptInteraction({
+          id: reviewIssueId,
+          companyId,
+          goalId: null,
+          projectId: null,
+        }, confirmation.id, {}, {
+          userId: "local-board",
+        });
+      } else {
+        await interactions.rejectInteraction({
+          id: reviewIssueId,
+          companyId,
+        }, confirmation.id, { reason: "Needs another pass" }, {
+          userId: "local-board",
+        });
+      }
+
+      const surfaced = await heartbeat.reconcileIssueGraphLiveness();
+      expect(surfaced.autoRecoveryEnabled).toBe(true);
+      expect(surfaced.findings).toBe(1);
+      expect(surfaced.escalationsCreated).toBe(1);
+      expect(surfaced.issueIds).toEqual([reviewIssueId]);
+
+      const [sourceIssue] = await db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, reviewIssueId));
+      expect(sourceIssue).toMatchObject({
+        status: "blocked",
+        assigneeAgentId: coderId,
+      });
+
+      const escalations = await db
+        .select()
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "harness_liveness_escalation")));
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0]).toMatchObject({
+        parentId: reviewIssueId,
+        assigneeAgentId: coderId,
+        originId: [
+          "harness_liveness",
+          companyId,
+          reviewIssueId,
+          "in_review_without_action_path",
+          reviewIssueId,
+        ].join(":"),
+      });
+    },
+  );
 
   it("keeps liveness findings advisory when auto recovery is disabled", async () => {
     await instanceSettingsService(db).updateExperimental({

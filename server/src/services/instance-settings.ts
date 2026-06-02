@@ -45,7 +45,7 @@ export function normalizeExperimentalSettings(raw: unknown): InstanceExperimenta
       enableIsolatedWorkspaces: parsed.data.enableIsolatedWorkspaces ?? false,
       enableCloudSync: parsed.data.enableCloudSync ?? false,
       autoRestartDevServerWhenIdle: parsed.data.autoRestartDevServerWhenIdle ?? false,
-      enableIssueGraphLivenessAutoRecovery: parsed.data.enableIssueGraphLivenessAutoRecovery ?? false,
+      enableIssueGraphLivenessAutoRecovery: parsed.data.enableIssueGraphLivenessAutoRecovery ?? true,
       issueGraphLivenessAutoRecoveryLookbackHours:
         parsed.data.issueGraphLivenessAutoRecoveryLookbackHours ??
         DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
@@ -56,7 +56,7 @@ export function normalizeExperimentalSettings(raw: unknown): InstanceExperimenta
     enableIsolatedWorkspaces: false,
     enableCloudSync: false,
     autoRestartDevServerWhenIdle: false,
-    enableIssueGraphLivenessAutoRecovery: false,
+    enableIssueGraphLivenessAutoRecovery: true,
     issueGraphLivenessAutoRecoveryLookbackHours:
       DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   };

@@ -40,7 +40,7 @@ export const instanceExperimentalSettingsSchema = z.object({
   enableIsolatedWorkspaces: z.boolean().default(false),
   enableCloudSync: z.boolean().default(false),
   autoRestartDevServerWhenIdle: z.boolean().default(false),
-  enableIssueGraphLivenessAutoRecovery: z.boolean().default(false),
+  enableIssueGraphLivenessAutoRecovery: z.boolean().default(true),
   issueGraphLivenessAutoRecoveryLookbackHours: z
     .number()
     .int()
