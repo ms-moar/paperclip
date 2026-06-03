@@ -284,6 +284,19 @@ export function setupLiveEventsWebSocketServer(
       subscriberCompanyId,
       buildActorForVisibility(context),
     );
+
+    // If the client disconnected while we were resolving visibility (an async DB
+    // round-trip), the socket's "close" event has already fired — before the
+    // "close" handler below is attached. Subscribing now would leak a
+    // live-events listener forever (its closure retains the dead socket and the
+    // visibility cache, and it is invoked on every published event), because the
+    // unsubscribe wired up below would never run. Everything from here to the
+    // "close" handler registration is synchronous, so an OPEN socket here is
+    // guaranteed to have its cleanup attached before any close can be processed.
+    if (socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
     const visibilityCache = new Map<string, { visible: boolean; expiresAt: number }>();
     const VISIBILITY_CACHE_TTL_MS = 30_000;
     const VISIBILITY_CACHE_MAX_ENTRIES = 500;

@@ -5,7 +5,13 @@ type LiveEventPayload = Record<string, unknown>;
 type LiveEventListener = (event: LiveEvent) => void;
 
 const emitter = new EventEmitter();
-emitter.setMaxListeners(0);
+// Finite cap so a subscriber leak surfaces as a logged MaxListenersExceeded
+// warning instead of growing silently. Set well above the realistic number of
+// concurrent live-event subscribers (WS clients) for a single company, but far
+// below the magnitude a real leak reaches. Previously this was 0 (unlimited),
+// which let a leaked-listener bug accumulate invisibly.
+const MAX_LIVE_EVENT_LISTENERS = 1000;
+emitter.setMaxListeners(MAX_LIVE_EVENT_LISTENERS);
 
 let nextEventId = 0;
 
@@ -51,4 +57,16 @@ export function subscribeCompanyLiveEvents(companyId: string, listener: LiveEven
 export function subscribeGlobalLiveEvents(listener: LiveEventListener) {
   emitter.on("*", listener);
   return () => emitter.off("*", listener);
+}
+
+/**
+ * Number of live-event listeners currently registered. With `companyId` it
+ * returns the count for that company's channel; without it, the total across
+ * all channels. Intended for leak detection / observability and tests — a count
+ * that climbs monotonically and never falls after clients disconnect indicates
+ * a subscriber leak.
+ */
+export function liveEventsListenerCount(companyId?: string): number {
+  if (companyId !== undefined) return emitter.listenerCount(companyId);
+  return emitter.eventNames().reduce((sum, name) => sum + emitter.listenerCount(name), 0);
 }
