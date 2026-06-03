@@ -60,7 +60,7 @@ Pre-rebase бэкап-ветки `backup/custom-pre-rebase-<date>` создаю�
 
 Что патчит сейчас:
 - сторонние плагины в `~/.paperclip/plugins/node_modules/@lucitra/...` (chat timeout/turns, visibility refresh);
-- **core UI**: `patch_core_ui_status_icons()` — впрыскивает `<style id="status-icon-override">` в `ui/dist/index.html` (blocked → октагон через clip-path, in_review → `?` через `::after`). Маркер `status-icon-override`.
+- **core UI**: `patch_core_ui_status_icons()` — впрыскивает `<style id="status-icon-override">` в `ui/dist/index.html`: blocked → октагон (clip-path), in_review → `?` (`::after`), in_progress → спиннер (разрыв в кольце + `@keyframes rotate`, `prefers-reduced-motion` отключает). **Self-healing**: на каждом запуске вырезает старый `status-icon-override` блок и впрыскивает текущий → правки CSS в этой функции пролетают на уже-собранный dist без билда (`bash scripts/apply-plugin-patches.sh` + hard-refresh).
 
 ### 3b. `patches/*.patch` — pnpm `patchedDependencies`
 
