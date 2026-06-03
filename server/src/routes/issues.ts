@@ -482,6 +482,54 @@ const INVALID_AGENT_IN_REVIEW_DISPOSITION_MESSAGE =
   "link or request a pending approval, assign a human reviewer with assigneeUserId, set a typed executionState.currentParticipant through an execution policy, " +
   "or schedule an issue monitor for an external review/check. After creating one of those review paths, retry the status update.";
 
+// MAD-203: server PATCH guard for orphan in_review (PR-B of MAD-190).
+const IN_REVIEW_LIVENESS_VALID_PATHS = [
+  "executionPolicy",
+  "interaction",
+  "monitor",
+  "scheduledRetry",
+] as const;
+
+const IN_REVIEW_LIVENESS_PENDING_INTERACTION_KINDS = new Set([
+  "ask_user_questions",
+  "request_confirmation",
+  "suggest_tasks",
+]);
+
+const IN_REVIEW_LIVENESS_REJECT_MESSAGE =
+  "PATCH status=in_review rejected: one of executionPolicy stage with reviewer, " +
+  "pending interaction, active monitor, or scheduledRetry required.";
+
+function isStrictReviewGuardOn() {
+  const raw = process.env.STRICT_REVIEW_GUARD;
+  if (raw === undefined) return true;
+  return raw.trim().toLowerCase() !== "off";
+}
+
+function executionPolicyHasStageWithReviewer(policy: unknown): boolean {
+  const normalized = normalizeIssueExecutionPolicy(policy ?? null);
+  if (!normalized) return false;
+  return normalized.stages.some(
+    (stage) => Array.isArray(stage.participants) && stage.participants.length > 0,
+  );
+}
+
+function inReviewMonitorActive(input: {
+  existingMonitorNextCheckAt: Date | null;
+  patchMonitorNextCheckAt: unknown;
+  executionPolicy: unknown;
+}): boolean {
+  if (
+    input.patchMonitorNextCheckAt instanceof Date &&
+    !Number.isNaN(input.patchMonitorNextCheckAt.getTime())
+  ) {
+    return true;
+  }
+  if (input.patchMonitorNextCheckAt === undefined && input.existingMonitorNextCheckAt) return true;
+  const normalized = normalizeIssueExecutionPolicy(input.executionPolicy ?? null);
+  return Boolean(normalized?.monitor?.nextCheckAt);
+}
+
 function executionPrincipalsEqual(
   left: ParsedExecutionState["currentParticipant"] | null,
   right: ParsedExecutionState["currentParticipant"] | null,
@@ -1126,6 +1174,96 @@ export function issueRoutes(
       environmentId,
       { allowedDrivers: ["local", "ssh", "sandbox"] },
     );
+  }
+
+  async function evaluateInReviewLivenessGuard(input: {
+    issue: { id: string; monitorNextCheckAt?: Date | null };
+    patchExecutionPolicy: unknown;
+    patchMonitorNextCheckAt: unknown;
+    existingExecutionPolicy: unknown;
+    existingMonitorNextCheckAt: Date | null;
+  }): Promise<{ ok: boolean; satisfied: string[] }> {
+    const satisfied: string[] = [];
+
+    const effectivePolicy =
+      input.patchExecutionPolicy === undefined
+        ? input.existingExecutionPolicy
+        : input.patchExecutionPolicy;
+    if (executionPolicyHasStageWithReviewer(effectivePolicy)) {
+      satisfied.push("executionPolicy");
+    }
+
+    if (
+      inReviewMonitorActive({
+        existingMonitorNextCheckAt: input.existingMonitorNextCheckAt,
+        patchMonitorNextCheckAt: input.patchMonitorNextCheckAt,
+        executionPolicy: effectivePolicy,
+      })
+    ) {
+      satisfied.push("monitor");
+    }
+
+    const interactions = await issueThreadInteractionService(db).listForIssue(input.issue.id);
+    if (
+      interactions.some(
+        (interaction) =>
+          interaction.status === "pending" &&
+          IN_REVIEW_LIVENESS_PENDING_INTERACTION_KINDS.has(String(interaction.kind)),
+      )
+    ) {
+      satisfied.push("interaction");
+    }
+
+    const scheduledRetry = await svc.getCurrentScheduledRetry(input.issue.id);
+    if (
+      scheduledRetry &&
+      scheduledRetry.scheduledRetryAt instanceof Date &&
+      scheduledRetry.scheduledRetryAt.getTime() > Date.now()
+    ) {
+      satisfied.push("scheduledRetry");
+    }
+
+    return { ok: satisfied.length > 0, satisfied };
+  }
+
+  // MAD-203: returns true when the request was blocked (response already sent).
+  async function applyInReviewLivenessGuard(input: {
+    res: Response;
+    existing: {
+      id: string;
+      status: string;
+      executionPolicy?: unknown;
+      monitorNextCheckAt?: Date | null;
+    };
+    updateFields: Record<string, unknown>;
+  }): Promise<boolean> {
+    const nextStatus =
+      typeof input.updateFields.status === "string"
+        ? input.updateFields.status
+        : input.existing.status;
+    if (nextStatus !== "in_review") return false;
+    if (input.existing.status === "in_review") return false;
+
+    const verdict = await evaluateInReviewLivenessGuard({
+      issue: { id: input.existing.id, monitorNextCheckAt: input.existing.monitorNextCheckAt ?? null },
+      patchExecutionPolicy: input.updateFields.executionPolicy,
+      patchMonitorNextCheckAt: input.updateFields.monitorNextCheckAt,
+      existingExecutionPolicy: input.existing.executionPolicy ?? null,
+      existingMonitorNextCheckAt: input.existing.monitorNextCheckAt ?? null,
+    });
+    if (verdict.ok) return false;
+
+    if (!isStrictReviewGuardOn()) {
+      input.res.setHeader("X-In-Review-Liveness", "missing");
+      return false;
+    }
+
+    input.res.status(422).json({
+      error: "in_review_requires_liveness",
+      message: IN_REVIEW_LIVENESS_REJECT_MESSAGE,
+      validPaths: [...IN_REVIEW_LIVENESS_VALID_PATHS],
+    });
+    return true;
   }
 
   async function assertAgentInReviewReviewPath(input: {
@@ -2298,6 +2436,15 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const updateFields = sourceIssueStatus ? { status: sourceIssueStatus } : {};
+    if (
+      await applyInReviewLivenessGuard({
+        res,
+        existing,
+        updateFields,
+      })
+    ) {
+      return;
+    }
     await assertAgentInReviewReviewPath({
       existing,
       updateFields,
@@ -3777,6 +3924,16 @@ export function issueRoutes(
           reviewRequest,
         };
       }
+    }
+
+    if (
+      await applyInReviewLivenessGuard({
+        res,
+        existing,
+        updateFields,
+      })
+    ) {
+      return;
     }
 
     await assertAgentInReviewReviewPath({
