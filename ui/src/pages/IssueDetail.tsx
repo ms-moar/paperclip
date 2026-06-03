@@ -73,6 +73,9 @@ import { IssueReferenceActivitySummary } from "../components/IssueReferenceActiv
 import { IssueRelatedWorkPanel } from "../components/IssueRelatedWorkPanel";
 import { IssueMonitorActivityCard } from "../components/IssueMonitorActivityCard";
 import { IssueScheduledRetryCard } from "../components/IssueScheduledRetryCard";
+import { IssueWriteConflictBanner } from "../components/IssueWriteConflictBanner";
+import { ReviewDecisionButtons } from "../components/ReviewDecisionButtons";
+import { getIssueWriteConflictFromError, type IssueWriteConflict } from "../lib/issueWriteConflict";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
@@ -1257,6 +1260,7 @@ export function IssueDetail() {
   const [optimisticComments, setOptimisticComments] = useState<OptimisticIssueComment[]>([]);
   const [locallyQueuedCommentRunIds, setLocallyQueuedCommentRunIds] = useState<Map<string, string>>(() => new Map());
   const [pendingCommentComposerFocusKey, setPendingCommentComposerFocusKey] = useState(0);
+  const [writeConflict, setWriteConflict] = useState<IssueWriteConflict | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
   const commentComposerRef = useRef<IssueChatComposerHandle | null>(null);
@@ -1749,6 +1753,7 @@ export function IssueDetail() {
       mergeIssueResponseIntoCaches(issueRefs, nextIssue);
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issueId!) });
       invalidateIssueCollections();
+      setWriteConflict(null);
     },
     onError: (err, _variables, context) => {
       for (const [queryKey, previousIssue] of context?.previousDetailQueries ?? []) {
@@ -1756,6 +1761,11 @@ export function IssueDetail() {
       }
       if (context?.selectedCompanyId) {
         queryClient.setQueryData(queryKeys.issues.list(context.selectedCompanyId), context.previousList);
+      }
+      const conflict = getIssueWriteConflictFromError(err);
+      if (conflict) {
+        setWriteConflict(conflict);
+        return;
       }
       pushToast({
         title: "Issue update failed",
@@ -2623,6 +2633,10 @@ export function IssueDetail() {
     if (main) main.scrollTop = 0;
   }, [issueId, navigationType]);
 
+  useEffect(() => {
+    setWriteConflict(null);
+  }, [issueId]);
+
   // Redirect to identifier-based URL if navigated via UUID
   useEffect(() => {
     const nextState = resolvedIssueDetailState ?? location.state;
@@ -3253,6 +3267,24 @@ export function IssueDetail() {
           This issue is hidden
         </div>
       )}
+      {writeConflict && (
+        <IssueWriteConflictBanner
+          conflict={writeConflict}
+          onDismiss={() => setWriteConflict(null)}
+          onRefresh={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) });
+            setWriteConflict(null);
+          }}
+        />
+      )}
+      <ReviewDecisionButtons
+        issue={issue}
+        viewer={{ agentId: null, userId: currentUserId }}
+        onSubmit={async (decision) => {
+          await updateIssue.mutateAsync(decision);
+        }}
+        submitting={updateIssue.isPending}
+      />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
           {activePauseHold.isRoot ? (
