@@ -414,13 +414,13 @@ export function assigneePrincipal(input: AssigneeLike): IssueExecutionStagePrinc
   return null;
 }
 
-function actorPrincipal(actor: ActorLike): IssueExecutionStagePrincipal | null {
+export function actorPrincipal(actor: ActorLike): IssueExecutionStagePrincipal | null {
   if (actor.agentId) return { type: "agent", agentId: actor.agentId, userId: null };
   if (actor.userId) return { type: "user", userId: actor.userId, agentId: null };
   return null;
 }
 
-function principalsEqual(a: IssueExecutionStagePrincipal | null, b: IssueExecutionStagePrincipal | null): boolean {
+export function principalsEqual(a: IssueExecutionStagePrincipal | null, b: IssueExecutionStagePrincipal | null): boolean {
   if (!a || !b) return false;
   if (a.type !== b.type) return false;
   return a.type === "agent" ? a.agentId === b.agentId : a.userId === b.userId;

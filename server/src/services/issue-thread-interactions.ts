@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -6,6 +7,7 @@ import {
   heartbeatRuns,
   issueComments,
   issueDocuments,
+  issueExecutionDecisions,
   issueThreadInteractions,
   issues,
 } from "@paperclipai/db";
@@ -36,6 +38,13 @@ import {
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import {
+  actorPrincipal,
+  applyIssueExecutionPolicyTransition,
+  normalizeIssueExecutionPolicy,
+  parseIssueExecutionState,
+  principalsEqual,
+} from "./issue-execution-policy.js";
 import { issueService } from "./issues.js";
 
 type InteractionActor = {
@@ -477,6 +486,114 @@ export function issueThreadInteractionService(db: Db) {
     return current;
   }
 
+  async function maybeAdvanceExecutionStageOnConfirmationAccept(
+    tx: any,
+    args: {
+      issueRow: Record<string, unknown>;
+      interaction: IssueThreadInteraction;
+      actor: InteractionActor;
+    },
+  ): Promise<IssueWakeTarget | null> {
+    if (args.interaction.kind !== "request_confirmation") return null;
+
+    const policy = normalizeIssueExecutionPolicy(args.issueRow.executionPolicy ?? null);
+    if (!policy) return null;
+
+    const state = parseIssueExecutionState(args.issueRow.executionState);
+    if (!state || state.status !== "pending") return null;
+    if (!state.currentParticipant) return null;
+
+    const stage = policy.stages.find((entry) => entry.id === state.currentStageId);
+    if (!stage) return null;
+    if (stage.type !== "review" && stage.type !== "approval") return null;
+
+    const actor = actorPrincipal({
+      agentId: args.actor.agentId ?? null,
+      userId: args.actor.userId ?? null,
+    });
+    if (!actor) return null;
+    if (!principalsEqual(state.currentParticipant, actor)) return null;
+
+    const interaction = args.interaction as RequestConfirmationInteraction;
+    const syntheticCommentBody = interaction.payload.prompt.trim();
+    if (syntheticCommentBody.length === 0) return null;
+
+    const transition = applyIssueExecutionPolicyTransition({
+      issue: args.issueRow as Parameters<typeof applyIssueExecutionPolicyTransition>[0]["issue"],
+      policy,
+      previousPolicy: policy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {
+        assigneeAgentId: undefined,
+        assigneeUserId: undefined,
+      },
+      actor: {
+        agentId: args.actor.agentId ?? null,
+        userId: args.actor.userId ?? null,
+      },
+      commentBody: syntheticCommentBody,
+    });
+
+    const decisionId = transition.decision ? randomUUID() : null;
+    if (decisionId) {
+      const nextExecutionState = transition.patch.executionState;
+      if (!nextExecutionState || typeof nextExecutionState !== "object") {
+        throw new Error("Execution policy decision patch is missing executionState");
+      }
+      transition.patch.executionState = {
+        ...(nextExecutionState as Record<string, unknown>),
+        lastDecisionId: decisionId,
+      };
+    }
+
+    const finalExecutionState = transition.patch.executionState as
+      | Record<string, unknown>
+      | undefined;
+    const completedFinalStage =
+      transition.decision?.outcome === "approved" &&
+      typeof transition.patch.status !== "string" &&
+      finalExecutionState?.status === "completed";
+
+    const updatePatch: Record<string, unknown> = {
+      ...transition.patch,
+      actorAgentId: args.actor.agentId ?? null,
+      actorUserId: args.actor.userId ?? null,
+    };
+    if (completedFinalStage) {
+      updatePatch.status = "done";
+    }
+
+    const updated = await issueService(db).update(
+      args.issueRow.id as string,
+      updatePatch,
+      tx,
+    );
+
+    if (!updated) return null;
+
+    if (transition.decision && decisionId) {
+      await tx.insert(issueExecutionDecisions).values({
+        id: decisionId,
+        companyId: updated.companyId,
+        issueId: updated.id,
+        stageId: transition.decision.stageId,
+        stageType: transition.decision.stageType,
+        actorAgentId: args.actor.agentId ?? null,
+        actorUserId: args.actor.userId ?? null,
+        outcome: transition.decision.outcome,
+        body: transition.decision.body,
+        createdByRunId: null,
+      });
+    }
+
+    return {
+      id: updated.id,
+      assigneeAgentId: updated.assigneeAgentId ?? null,
+      assigneeUserId: updated.assigneeUserId ?? null,
+      status: updated.status,
+    };
+  }
+
   async function acceptRequestConfirmation(args: {
     issue: { id: string; companyId: string };
     current: IssueThreadInteractionRow;
@@ -518,24 +635,38 @@ export function issueThreadInteractionService(db: Db) {
         throw conflict("Interaction has already been resolved");
       }
 
-      const issueContext = await tx
-        .select({
-          id: issues.id,
-          companyId: issues.companyId,
-          status: issues.status,
-          assigneeAgentId: issues.assigneeAgentId,
-          assigneeUserId: issues.assigneeUserId,
-        })
+      const issueRow = await tx
+        .select()
         .from(issues)
         .where(eq(issues.id, args.issue.id))
-        .then((rows: IssueResolutionContext[]) => rows[0] ?? null);
+        .then((rows: Array<Record<string, unknown>>) => rows[0] ?? null);
 
-      if (!issueContext || issueContext.companyId !== args.issue.companyId) {
+      if (!issueRow || issueRow.companyId !== args.issue.companyId) {
         throw notFound("Issue not found");
       }
 
+      const issueContext: IssueResolutionContext = {
+        id: issueRow.id as string,
+        companyId: issueRow.companyId as string,
+        status: issueRow.status as string,
+        assigneeAgentId: (issueRow.assigneeAgentId as string | null) ?? null,
+        assigneeUserId: (issueRow.assigneeUserId as string | null) ?? null,
+      };
+
       let continuationIssue: IssueWakeTarget | null = null;
-      if (shouldReturnAcceptedConfirmationToCreatorAgent({
+
+      const finalizedIssue = await maybeAdvanceExecutionStageOnConfirmationAccept(tx, {
+        issueRow,
+        interaction: hydrateInteraction(updated),
+        actor: args.actor,
+      });
+
+      const existingExecutionState = parseIssueExecutionState(issueRow.executionState);
+      const hasActiveExecutionStage = existingExecutionState?.status === "pending";
+
+      if (finalizedIssue) {
+        continuationIssue = finalizedIssue;
+      } else if (!hasActiveExecutionStage && shouldReturnAcceptedConfirmationToCreatorAgent({
         issue: issueContext,
         current: args.current,
         actor: args.actor,
