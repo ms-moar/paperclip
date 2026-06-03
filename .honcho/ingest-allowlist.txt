@@ -1,0 +1,14 @@
+README.md
+AGENTS.md
+CLAUDE.md
+docs/**/*.md
+doc/**/*.md
+skills/paperclip/SKILL.md
+skills/diagnose-why-work-stopped/SKILL.md
+skills/paperclip-converting-plans-to-tasks/SKILL.md
+skills/paperclip-create-agent/SKILL.md
+skills/paperclip-dev/SKILL.md
+skills/terminal-bench-loop/SKILL.md
+server/README.md
+ui/README.md
+cli/README.md

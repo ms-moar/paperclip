@@ -1,0 +1,58 @@
+version: 1
+workspace: paperclip
+repo: paperclip
+repo_path: /home/ubuntu/paperclip
+project_peer: project-paperclip
+id_policy: slug-only
+metadata_defaults:
+  company: Paperclip
+  repo: paperclip
+  managed_by: honcho-ops
+components:
+  root:
+    path: .
+    peer: project-paperclip
+    session: project-component-inventory
+    description: Paperclip control-plane monorepo root.
+  server:
+    path: server
+    peer: component-server
+    session: component-server
+    description: Paperclip backend/server.
+  ui:
+    path: ui
+    peer: component-ui
+    session: component-ui
+    description: Paperclip web UI.
+  cli:
+    path: cli
+    peer: component-cli
+    session: component-cli
+    description: Paperclip CLI.
+  worker:
+    path: packages
+    peer: component-worker
+    session: component-worker
+    description: Shared packages/adapters/worker-related code.
+  skills:
+    path: skills
+    peer: component-skills
+    session: component-skills
+    description: Bundled Paperclip skills and governance workflows.
+  docs:
+    path: docs
+    peer: component-docs
+    session: component-docs
+    description: Product docs, guides, specs, and operational documentation.
+session_types:
+  component: component-{component}
+  issue: issue-{id}
+  incident: incident-{date}
+  architecture: architecture-{topic}
+  governance: governance-{topic}
+ingest:
+  allowlist_file: .honcho/ingest-allowlist.txt
+  deny_patterns_file: .honcho/secret-deny-patterns.txt
+  default_peer: project-paperclip
+  default_session: project-component-inventory
+  issue_policy: summarize-only
