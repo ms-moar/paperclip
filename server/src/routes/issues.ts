@@ -146,6 +146,7 @@ type ActivityExecutionParticipant = Pick<
   NormalizedExecutionPolicy["stages"][number]["participants"][number],
   "type" | "agentId" | "userId"
 >;
+type IssueWriteConflictErrorCode = "checkout_held_by_other_run" | "assignee_mismatch" | "wake_context_stale";
 type ExecutionStageWakeContext = {
   wakeRole: "reviewer" | "approver" | "executor";
   stageId: string | null;
@@ -153,6 +154,7 @@ type ExecutionStageWakeContext = {
   currentParticipant: ParsedExecutionState["currentParticipant"];
   returnAssignee: ParsedExecutionState["returnAssignee"];
   reviewRequest: ParsedExecutionState["reviewRequest"];
+  lastDecisionId: ParsedExecutionState["lastDecisionId"];
   lastDecisionOutcome: ParsedExecutionState["lastDecisionOutcome"];
   allowedActions: string[];
 };
@@ -559,6 +561,7 @@ function buildExecutionStageWakeContext(input: {
     currentParticipant: input.state.currentParticipant,
     returnAssignee: input.state.returnAssignee,
     reviewRequest: input.state.reviewRequest ?? null,
+    lastDecisionId: input.state.lastDecisionId,
     lastDecisionOutcome: input.state.lastDecisionOutcome,
     allowedActions: input.allowedActions,
   };
@@ -1467,16 +1470,128 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  function summarizeExecutionStateForConflict(issue: { executionState?: unknown }) {
+    const state = parseIssueExecutionState(issue.executionState ?? null);
+    return {
+      status: state?.status ?? null,
+      currentParticipant: state?.currentParticipant ?? null,
+      lastDecisionId: state?.lastDecisionId ?? null,
+    };
+  }
+
+  function resolveIssueWriteConflictErrorCode(
+    issue: { assigneeAgentId: string | null; checkoutRunId?: string | null },
+    actorAgentId: string | null,
+    actorRunId: string | null,
+  ): IssueWriteConflictErrorCode {
+    if (issue.checkoutRunId && issue.checkoutRunId !== actorRunId) return "checkout_held_by_other_run";
+    if (actorAgentId && issue.assigneeAgentId && issue.assigneeAgentId !== actorAgentId) return "assignee_mismatch";
+    return "checkout_held_by_other_run";
+  }
+
+  function isHttpConflictError(err: unknown): err is { status: number } {
+    return err instanceof HttpError || (!!err && typeof err === "object" && (err as { status?: unknown }).status === 409);
+  }
+
+  function sendIssueWriteConflict(
+    res: Response,
+    issue: {
+      id: string;
+      status: string;
+      assigneeAgentId: string | null;
+      checkoutRunId?: string | null;
+      executionState?: unknown;
+    },
+    input: { actorAgentId: string | null; actorRunId: string | null; errorCode?: IssueWriteConflictErrorCode },
+  ) {
+    const errorCode = input.errorCode ?? resolveIssueWriteConflictErrorCode(issue, input.actorAgentId, input.actorRunId);
+    res.status(409).json({
+      error: errorCode === "wake_context_stale" ? "Reviewer wake context is stale" : "Issue is checked out by another agent",
+      errorCode,
+      currentAssigneeAgentId: issue.assigneeAgentId,
+      currentCheckoutRunId: issue.checkoutRunId ?? null,
+      executionState: summarizeExecutionStateForConflict(issue),
+      details: {
+        issueId: issue.id,
+        status: issue.status,
+        assigneeAgentId: issue.assigneeAgentId,
+        checkoutRunId: issue.checkoutRunId ?? null,
+        actorAgentId: input.actorAgentId,
+        actorRunId: input.actorRunId,
+      },
+    });
+  }
+
+  function readWakeExecutionStageLastDecisionId(contextSnapshot: unknown): string | null | undefined {
+    if (!contextSnapshot || typeof contextSnapshot !== "object" || Array.isArray(contextSnapshot)) return undefined;
+    const executionStage = (contextSnapshot as Record<string, unknown>).executionStage;
+    if (!executionStage || typeof executionStage !== "object" || Array.isArray(executionStage)) return undefined;
+    if (!("lastDecisionId" in executionStage)) return undefined;
+    const value = (executionStage as Record<string, unknown>).lastDecisionId;
+    return typeof value === "string" || value === null ? value : undefined;
+  }
+
+  async function evaluateReviewerEvidencePath(
+    req: Request,
+    issue: { id: string; companyId: string; status: string; executionState?: unknown },
+  ): Promise<{ allowed: boolean; stale: boolean }> {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return { allowed: false, stale: false };
+    if (issue.status !== "in_review") return { allowed: false, stale: false };
+    const state = parseIssueExecutionState(issue.executionState ?? null);
+    if (!state || state.status !== "pending") return { allowed: false, stale: false };
+    if (state.currentParticipant?.type !== "agent" || state.currentParticipant.agentId !== req.actor.agentId) {
+      return { allowed: false, stale: false };
+    }
+    const run = await loadActorRunContext(req, issue.companyId);
+    const wakeLastDecisionId = readWakeExecutionStageLastDecisionId(run?.contextSnapshot ?? null);
+    if (wakeLastDecisionId !== undefined && wakeLastDecisionId !== state.lastDecisionId) {
+      return { allowed: false, stale: true };
+    }
+    return { allowed: true, stale: false };
+  }
+
+  function isReviewerDecisionPatchBody(body: unknown) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+    const record = body as Record<string, unknown>;
+    const keys = Object.keys(record).filter((key) => record[key] !== undefined);
+    return (
+      keys.every((key) => key === "status" || key === "comment") &&
+      (record.status === "done" || record.status === "in_progress") &&
+      typeof record.comment === "string" &&
+      record.comment.trim().length > 0
+    );
+  }
+
   async function assertAgentIssueMutationAllowed(
     req: Request,
     res: Response,
-    issue: { id: string; companyId: string; status: string; assigneeAgentId: string | null },
+    issue: {
+      id: string;
+      companyId: string;
+      status: string;
+      assigneeAgentId: string | null;
+      checkoutRunId?: string | null;
+      executionState?: unknown;
+    },
+    options: { reviewerEvidencePath?: "comment" | "decision_patch" | "none" } = {},
   ) {
     if (req.actor.type !== "agent") return true;
     const actorAgentId = req.actor.agentId;
     if (!actorAgentId) {
       res.status(403).json({ error: "Agent authentication required" });
       return false;
+    }
+    if (options.reviewerEvidencePath && options.reviewerEvidencePath !== "none") {
+      const reviewerEvidence = await evaluateReviewerEvidencePath(req, issue);
+      if (reviewerEvidence.stale) {
+        sendIssueWriteConflict(res, issue, {
+          actorAgentId,
+          actorRunId: req.actor.runId?.trim() || null,
+          errorCode: "wake_context_stale",
+        });
+        return false;
+      }
+      if (reviewerEvidence.allowed) return true;
     }
     if (issue.assigneeAgentId === null) {
       return true;
@@ -1486,13 +1601,9 @@ export function issueRoutes(
         return true;
       }
       if (issue.status === "in_progress") {
-        res.status(409).json({
-          error: "Issue is checked out by another agent",
-          details: {
-            issueId: issue.id,
-            assigneeAgentId: issue.assigneeAgentId,
-            actorAgentId,
-          },
+        sendIssueWriteConflict(res, issue, {
+          actorAgentId,
+          actorRunId: req.actor.runId?.trim() || null,
         });
       } else {
         res.status(403).json({
@@ -1513,7 +1624,16 @@ export function issueRoutes(
     }
     const runId = requireAgentRunId(req, res);
     if (!runId) return false;
-    const ownership = await svc.assertCheckoutOwner(issue.id, actorAgentId, runId);
+    let ownership: Awaited<ReturnType<typeof svc.assertCheckoutOwner>>;
+    try {
+      ownership = await svc.assertCheckoutOwner(issue.id, actorAgentId, runId);
+    } catch (err) {
+      if (isHttpConflictError(err)) {
+        sendIssueWriteConflict(res, issue, { actorAgentId, actorRunId: runId });
+        return false;
+      }
+      throw err;
+    }
     if (ownership.adoptedFromRunId) {
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -3713,7 +3833,9 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
-    if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    if (!(await assertAgentIssueMutationAllowed(req, res, existing, {
+      reviewerEvidencePath: isReviewerDecisionPatchBody(req.body) ? "decision_patch" : "none",
+    }))) return;
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
     const actor = getActorInfo(req);
@@ -4778,7 +4900,20 @@ export function issueRoutes(
 
     const checkoutRunId = requireAgentRunId(req, res);
     if (req.actor.type === "agent" && !checkoutRunId) return;
-    const updated = await svc.checkout(id, req.body.agentId, req.body.expectedStatuses, checkoutRunId);
+    let updated;
+    try {
+      updated = await svc.checkout(id, req.body.agentId, req.body.expectedStatuses, checkoutRunId);
+    } catch (err) {
+      if (isHttpConflictError(err)) {
+        const current = await svc.getById(id);
+        sendIssueWriteConflict(res, current ?? issue, {
+          actorAgentId: req.body.agentId,
+          actorRunId: checkoutRunId,
+        });
+        return;
+      }
+      throw err;
+    }
     const actor = getActorInfo(req);
 
     await logActivity(db, {
@@ -5508,7 +5643,7 @@ export function issueRoutes(
       issue.id,
       await resolveIssueVisibility(db, issue.companyId, req.actor),
     );
-    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (!(await assertAgentIssueMutationAllowed(req, res, issue, { reviewerEvidencePath: "comment" }))) return;
     if (!assertStructuredCommentFieldsAllowed(req, res, {
       presentation: req.body.presentation,
       metadata: req.body.metadata,

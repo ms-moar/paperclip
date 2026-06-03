@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HttpError } from "../errors.js";
 
 const issueId = "11111111-1111-4111-8111-111111111111";
 const companyId = "22222222-2222-4222-8222-222222222222";
@@ -13,6 +14,7 @@ const recoveryActionId = "77777777-7777-4777-8777-777777777777";
 const mockIssueService = vi.hoisted(() => ({
   addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
+  checkout: vi.fn(),
   create: vi.fn(),
   createChild: vi.fn(),
   getAttachmentById: vi.fn(),
@@ -70,6 +72,8 @@ const mockIssueRecoveryActionService = vi.hoisted(() => ({
   getActiveForIssue: vi.fn(async () => null),
   resolveActiveForIssue: vi.fn(async () => null),
 }));
+const mockTxInsertValues = vi.hoisted(() => vi.fn(async () => undefined));
+const mockTxInsert = vi.hoisted(() => vi.fn(() => ({ values: mockTxInsertValues })));
 const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
   reportRunActivity: vi.fn(async () => undefined),
@@ -166,6 +170,8 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
     companyId,
     status: "in_progress",
     priority: "high",
+    checkoutRunId: null,
+    executionRunId: null,
     projectId: null,
     goalId: null,
     parentId: null,
@@ -192,9 +198,10 @@ function makeAgent(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createRunContextDb(contextSnapshot: Record<string, unknown> = {}) {
+function createRunContextDb(contextSnapshot: Record<string, unknown> = {}, agentId = ownerAgentId) {
+  const tx = { insert: mockTxInsert };
   return {
-    transaction: async (callback: (tx: Record<string, never>) => Promise<unknown>) => callback({}),
+    transaction: async (callback: (tx: typeof tx) => Promise<unknown>) => callback(tx),
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
@@ -202,7 +209,7 @@ function createRunContextDb(contextSnapshot: Record<string, unknown> = {}) {
             resolve([{
               id: ownerRunId,
               companyId,
-              agentId: ownerAgentId,
+              agentId,
               contextSnapshot,
             }]),
         })),
@@ -290,7 +297,10 @@ describe("agent issue mutation checkout ownership", () => {
     mockCompanyService.getById.mockReset();
     mockIssueService.addComment.mockReset();
     mockIssueService.assertCheckoutOwner.mockReset();
+    mockIssueService.checkout.mockReset();
     mockIssueService.create.mockReset();
+    mockTxInsert.mockReset();
+    mockTxInsertValues.mockReset();
     mockIssueService.createChild.mockReset();
     mockIssueService.getAttachmentById.mockReset();
     mockIssueService.getByIdentifier.mockReset();
@@ -497,6 +507,9 @@ describe("agent issue mutation checkout ownership", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(409);
     expect(res.body.error).toBe("Issue is checked out by another agent");
+    expect(res.body.errorCode).toBe("assignee_mismatch");
+    expect(res.body.currentAssigneeAgentId).toBe(ownerAgentId);
+    expect(res.body.currentCheckoutRunId).toBeNull();
     expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
@@ -504,6 +517,115 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockWorkProductService.update).not.toHaveBeenCalled();
     expect(mockStorageService.putFile).not.toHaveBeenCalled();
     expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it("returns checkout_held_by_other_run when checkout is blocked by a foreign run lock", async () => {
+    const foreignRunId = "88888888-8888-4888-8888-888888888888";
+    mockIssueService.getById.mockResolvedValue(makeIssue({ checkoutRunId: foreignRunId, executionRunId: foreignRunId }));
+    mockIssueService.checkout.mockRejectedValue(new HttpError(409, "Issue checkout conflict"));
+
+    const res = await request(await createApp(peerActor()))
+      .post(`/api/issues/${issueId}/checkout`)
+      .send({ agentId: peerAgentId, expectedStatuses: ["todo", "in_progress"] });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "Issue is checked out by another agent",
+      errorCode: "checkout_held_by_other_run",
+      currentAssigneeAgentId: ownerAgentId,
+      currentCheckoutRunId: foreignRunId,
+      executionState: { status: null, currentParticipant: null, lastDecisionId: null },
+    });
+  });
+
+  it("allows an active reviewer to comment and request changes without owning checkout", async () => {
+    const lastDecisionId = "99999999-9999-4999-8999-999999999999";
+    const policy = {
+      mode: "normal",
+      commentRequired: true,
+      stages: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", type: "review", approvalsNeeded: 1, participants: [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", type: "agent", agentId: peerAgentId }] }],
+      monitor: null,
+    };
+    const reviewIssue = makeIssue({
+      status: "in_review",
+      executionPolicy: policy,
+      executionState: {
+        status: "pending",
+        currentStageId: policy.stages[0].id,
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: peerAgentId },
+        returnAssignee: { type: "agent", agentId: ownerAgentId },
+        reviewRequest: null,
+        completedStageIds: [],
+        lastDecisionId,
+        lastDecisionOutcome: null,
+      },
+    });
+    mockIssueService.getById.mockResolvedValue(reviewIssue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...reviewIssue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+
+    const app = await createApp(peerActor(), createRunContextDb({
+      executionStage: { lastDecisionId },
+    }, peerAgentId));
+
+    await request(app).post(`/api/issues/${issueId}/comments`).send({ body: "Reviewer evidence" }).expect(201);
+    const patchRes = await request(app)
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "in_progress", comment: "Changes requested: fix evidence path" });
+
+    expect(patchRes.status, JSON.stringify(patchRes.body)).toBe(200);
+    expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      issueId,
+      "Reviewer evidence",
+      expect.objectContaining({ agentId: peerAgentId }),
+      expect.objectContaining({ authorType: "agent" }),
+    );
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      issueId,
+      expect.objectContaining({
+        status: "in_progress",
+        executionState: expect.objectContaining({
+          status: "changes_requested",
+          lastDecisionId: expect.any(String),
+          lastDecisionOutcome: "changes_requested",
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("rejects active reviewer evidence writes when the wake context is stale", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({
+      status: "in_review",
+      executionState: {
+        status: "pending",
+        currentStageId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: peerAgentId },
+        returnAssignee: { type: "agent", agentId: ownerAgentId },
+        reviewRequest: null,
+        completedStageIds: [],
+        lastDecisionId: "99999999-9999-4999-8999-999999999999",
+        lastDecisionOutcome: null,
+      },
+    }));
+
+    const res = await request(await createApp(peerActor(), createRunContextDb({
+      executionStage: { lastDecisionId: "aaaaaaaa-0000-4000-8000-000000000000" },
+    }, peerAgentId)))
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Stale reviewer evidence" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.errorCode).toBe("wake_context_stale");
+    expect(mockIssueService.addComment).not.toHaveBeenCalled();
   });
 
   it("allows the checked-out owner with the matching run id to patch and update documents", async () => {

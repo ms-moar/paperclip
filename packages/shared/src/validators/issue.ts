@@ -441,6 +441,27 @@ export const checkoutIssueSchema = z.object({
 
 export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;
 
+export const issueWriteConflictErrorCodeSchema = z.enum([
+  "checkout_held_by_other_run",
+  "assignee_mismatch",
+  "wake_context_stale",
+]);
+
+export const issueWriteConflictResponseSchema = z.object({
+  error: z.string(),
+  errorCode: issueWriteConflictErrorCodeSchema,
+  currentAssigneeAgentId: z.string().uuid().nullable(),
+  currentCheckoutRunId: z.string().uuid().nullable(),
+  executionState: z.object({
+    status: z.enum(ISSUE_EXECUTION_STATE_STATUSES).nullable(),
+    currentParticipant: issueExecutionStagePrincipalSchema.nullable(),
+    lastDecisionId: z.string().uuid().nullable(),
+  }).strict(),
+}).passthrough();
+
+export type IssueWriteConflictErrorCode = z.infer<typeof issueWriteConflictErrorCodeSchema>;
+export type IssueWriteConflictResponse = z.infer<typeof issueWriteConflictResponseSchema>;
+
 const commentMetadataLabelSchema = z.string().trim().min(1).max(120);
 const commentMetadataTextSchema = z.string().trim().min(1).max(2000);
 
