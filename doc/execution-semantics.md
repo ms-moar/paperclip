@@ -292,7 +292,254 @@ A blocker chain is covered only when its unresolved leaf is live or explicitly w
 
 A `blocked` issue is stalled when the unresolved blocker leaf has no active run, queued wake, typed participant, pending interaction or approval, user owner, external owner/action, or recovery action. In that case the parent should show the first stalled leaf instead of presenting the dependency as calmly covered.
 
-## 8. Crash and Restart Recovery
+## 8. Reviewer wake vs. assignee checkout
+
+Execution-policy review and approval handoffs use two different control-plane rights:
+the reviewer owns evidence and decision submission, while the assignee checkout
+lock owns productive implementation work. A stale reviewer wake must not be able
+to fight the current assignee checkout after the execution decision pointer has
+moved on.
+
+### R1 — Wake-context revalidation at delivery time
+
+Before emitting `execution_review_requested`, `execution_approval_requested`, or
+`execution_changes_requested`, Paperclip must re-read the current issue and
+execution state, not rely on the queue row snapshot. The delivery check must
+recompute `(issue.status, assigneeAgentId, executionState.currentParticipant,
+executionState.status, executionState.lastDecisionId)` and suppress the wake
+when the recipient no longer matches the expected participant for the current
+decision pointer.
+
+Suppression is a typed delivery outcome, not a silent drop. Paperclip records
+`errorCode: "wake_context_stale"`, increments `wake.stale_suppressed`, and keeps
+the source issue unchanged because newer durable state already owns the next
+move.
+
+```json
+{
+  "$id": "paperclip.executionWake.deliveryRevalidation",
+  "type": "object",
+  "required": [
+    "issueId",
+    "wakeKind",
+    "recipientAgentId",
+    "decisionPointer",
+    "currentIssueState",
+    "expectedParticipantAgentId"
+  ],
+  "properties": {
+    "wakeKind": {
+      "enum": [
+        "execution_review_requested",
+        "execution_approval_requested",
+        "execution_changes_requested"
+      ]
+    },
+    "decisionPointer": {
+      "type": "object",
+      "required": ["lastDecisionId"],
+      "properties": {
+        "lastDecisionId": { "type": ["string", "null"] }
+      }
+    },
+    "currentIssueState": {
+      "type": "object",
+      "required": [
+        "status",
+        "assigneeAgentId",
+        "executionStateStatus",
+        "currentParticipantAgentId",
+        "lastDecisionId"
+      ],
+      "properties": {
+        "status": { "type": "string" },
+        "assigneeAgentId": { "type": ["string", "null"] },
+        "executionStateStatus": { "type": ["string", "null"] },
+        "currentParticipantAgentId": { "type": ["string", "null"] },
+        "lastDecisionId": { "type": ["string", "null"] }
+      }
+    },
+    "suppressed": { "const": true },
+    "errorCode": { "const": "wake_context_stale" },
+    "metric": { "const": "wake.stale_suppressed" }
+  }
+}
+```
+
+### R2 — Typed 409 errorCode separation
+
+Checkout conflicts must distinguish a real active checkout holder from a stale
+assignee context. `checkout_held_by_other_run` means a foreign `checkoutRunId`
+still maps to an active `executionRunId`; clients may back off or wait for
+normal lock release. `assignee_mismatch` means the issue owner changed and there
+is no live checkout lock to wait on; clients must stop because their wake
+context is obsolete.
+
+The HTTP status stays `409`, but the `errorCode` is normative and client-visible.
+The client must branch on `errorCode`, not infer behavior from prose.
+
+```json
+{
+  "$id": "paperclip.checkout.conflict409",
+  "type": "object",
+  "required": ["status", "errorCode", "issueId"],
+  "properties": {
+    "status": { "const": 409 },
+    "issueId": { "type": "string" },
+    "errorCode": {
+      "enum": ["checkout_held_by_other_run", "assignee_mismatch"]
+    },
+    "checkoutRunId": { "type": ["string", "null"] },
+    "executionRunId": { "type": ["string", "null"] },
+    "currentAssigneeAgentId": { "type": ["string", "null"] },
+    "requestedAgentId": { "type": "string" },
+    "clientAction": {
+      "enum": ["backoff_and_retry_later", "stop_context_stale"]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "errorCode": { "const": "checkout_held_by_other_run" } } },
+      "then": {
+        "required": ["checkoutRunId", "executionRunId"],
+        "properties": { "clientAction": { "const": "backoff_and_retry_later" } }
+      }
+    },
+    {
+      "if": { "properties": { "errorCode": { "const": "assignee_mismatch" } } },
+      "then": {
+        "properties": {
+          "checkoutRunId": { "const": null },
+          "executionRunId": { "const": null },
+          "clientAction": { "const": "stop_context_stale" }
+        }
+      }
+    }
+  ]
+}
+```
+
+### R3 — Reviewer evidence path
+
+A typed reviewer is allowed to leave evidence and submit a review decision
+without claiming the productive-work checkout. When the caller is
+`executionState.currentParticipant`, the issue is `in_review`, and
+`executionState.status` is `pending`, Paperclip must allow `POST /comments` and
+the review-decision `PATCH /api/issues/{issueId}` shape (`status=done` to
+approve, or `status=in_progress` plus `comment` to request changes) without a
+checkout lock.
+
+Open question for board/CTO approval in Phase 6: should the reviewer also be
+allowed to submit an atomic decision when `executionState.status` is no longer
+`pending`, such as after `changes_requested` reassigned implementation ownership?
+Default recommendation: allow it only when the decision pointer has not changed;
+reject it when `executionState.lastDecisionId` advanced, because that proves a
+newer decision owns the review state.
+
+```json
+{
+  "$id": "paperclip.executionReview.reviewerEvidencePath",
+  "type": "object",
+  "required": [
+    "callerAgentId",
+    "issueStatus",
+    "executionStateStatus",
+    "currentParticipantAgentId",
+    "lastDecisionId",
+    "requestLastDecisionId",
+    "allowedWithoutCheckout"
+  ],
+  "properties": {
+    "issueStatus": { "const": "in_review" },
+    "executionStateStatus": {
+      "enum": ["pending", "changes_requested", "approved", "cancelled"]
+    },
+    "allowedRoutes": {
+      "items": {
+        "enum": [
+          "POST /api/issues/{issueId}/comments",
+          "PATCH /api/issues/{issueId} status=done comment=*",
+          "PATCH /api/issues/{issueId} status=in_progress comment=*"
+        ]
+      }
+    },
+    "allowedWithoutCheckout": { "type": "boolean" },
+    "defaultDecision": {
+      "type": "object",
+      "properties": {
+        "pending": { "const": "allow_when_caller_is_currentParticipant" },
+        "nonPendingUnchangedPointer": { "const": "allow" },
+        "nonPendingAdvancedPointer": { "const": "reject_context_stale" }
+      }
+    },
+    "staleErrorCode": { "const": "review_context_stale" }
+  }
+}
+```
+
+### R4 — Source-resolved wake folding
+
+Wake queues must fold review/approval wakes by their source decision pointer,
+not only by issue and recipient. The fold key is
+`(issueId, recipientAgentId, executionState.lastDecisionId)`, so duplicate wakes
+for the same review decision collapse, while a later decision can still wake its
+current participant.
+
+When R1 suppresses a stale wake, Paperclip must remove every equivalent pending
+queue row with the same fold key. This guarantees a stale review wake cannot be
+re-emitted after newer source state has already moved the issue to a productive
+checkout path.
+
+```json
+{
+  "$id": "paperclip.executionWake.sourceResolvedFolding",
+  "type": "object",
+  "required": ["foldKey", "foldAction"],
+  "properties": {
+    "foldKey": {
+      "type": "object",
+      "required": ["issueId", "recipientAgentId", "lastDecisionId"],
+      "properties": {
+        "issueId": { "type": "string" },
+        "recipientAgentId": { "type": "string" },
+        "lastDecisionId": { "type": ["string", "null"] }
+      }
+    },
+    "foldAction": {
+      "enum": ["coalesce_pending_equivalents", "remove_stale_equivalents"]
+    },
+    "suppressionErrorCode": { "const": "wake_context_stale" },
+    "guarantee": { "const": "stale_wake_not_reemitted_from_queue" }
+  }
+}
+```
+
+### MAD-203 stale-review timeline
+
+Under this contract, the stale reviewer wakes at 11:24 and 11:40 are suppressed
+by R1/R4 because the execution decision pointer no longer names that reviewer as
+the current participant. The 11:41 checkout by Mid Engineer A remains the valid
+productive-work path.
+
+```mermaid
+sequenceDiagram
+  participant Reviewer as Reviewer wake recipient
+  participant Queue as Wake queue
+  participant Control as Control plane
+  participant Assignee as Mid Engineer A
+
+  Note over Control: 11:13 request_changes advances lastDecisionId\nand returns implementation ownership
+  Queue->>Reviewer: 11:24 stale execution_changes_requested
+  Control->>Control: R1 revalidate currentParticipant + lastDecisionId
+  Control--xReviewer: suppress errorCode=wake_context_stale
+  Control->>Queue: R4 remove equivalent pending wake rows
+  Queue->>Reviewer: 11:40 equivalent stale wake
+  Control->>Control: R4 fold prevents re-emission
+  Assignee->>Control: 11:41 checkout for productive implementation work
+  Control-->>Assignee: checkout accepted; reviewer path no longer owns work
+```
+
+## 9. Crash and Restart Recovery
 
 Paperclip now treats crash/restart recovery as a stranded-assigned-work problem, not just a stranded-run problem.
 
@@ -336,7 +583,7 @@ Cheap model profiles are only for status-only operational recovery overhead. Pap
 
 Automatic retries that can continue source work must use the original/normal model lane. This includes failed source-work retries, process-loss retries, transient/scheduled retries, max-turn continuations, source-assignee continuations, assigned-todo dispatch recovery, and any run that can update repo files, issue documents, plans, work products, or attachments. When a cheap status-only recovery determines that actual work remains, it must hand back to a normal-model worker run before source work or persistent deliverable updates resume. Cheap recovery hints must be scrubbed from copied retry, resume, child, and downstream source-work contexts.
 
-## 9. Startup and Periodic Reconciliation
+## 10. Startup and Periodic Reconciliation
 
 Startup recovery and periodic recovery are different from normal wakeup delivery.
 
@@ -350,7 +597,7 @@ On startup and on the periodic recovery loop, Paperclip now does five things in 
 
 The stranded-work pass closes the gap where issue state survives a crash but the wake/run path does not. The silent-run scan covers the separate case where a live process exists but has stopped producing observable output. The productivity-review pass is later and separate; it reviews unusual progression patterns on assigned source issues, not stale run handles after a source issue already has a valid disposition.
 
-## 10. Silent Active-Run Watchdog
+## 11. Silent Active-Run Watchdog
 
 An active run can still be unhealthy even when its process is `running`. Paperclip treats prolonged output silence as a watchdog signal, not as proof that the run is failed.
 
@@ -402,7 +649,7 @@ This is distinct from productivity review. Productivity review asks whether an a
 
 Detached process cleanup is operational hygiene, not source issue liveness. Cleanup should be best-effort and auditable. If cleanup fails but the source issue is already terminal with same-run durable evidence, Paperclip should preserve the cleanup failure on the run/watchdog audit trail and route only the cleanup concern to bounded recovery when a real owner/action remains.
 
-## 11. Auto-Recover vs Explicit Recovery vs Human Escalation
+## 12. Auto-Recover vs Explicit Recovery vs Human Escalation
 
 Paperclip uses three different recovery outcomes, depending on how much it can safely infer.
 
@@ -446,7 +693,7 @@ Examples:
 
 In these cases Paperclip should leave a visible issue/comment trail instead of silently retrying.
 
-## 12. What This Does Not Mean
+## 13. What This Does Not Mean
 
 These semantics do not change V1 into an auto-reassignment system.
 
@@ -463,7 +710,7 @@ The recovery model is intentionally conservative:
 - open an explicit recovery action when the system can identify a bounded recovery owner/action
 - escalate visibly when the system cannot safely keep going
 
-## 13. Practical Interpretation
+## 14. Practical Interpretation
 
 For a board operator, the intended meaning is:
 
