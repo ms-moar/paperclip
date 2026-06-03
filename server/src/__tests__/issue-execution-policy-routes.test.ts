@@ -536,6 +536,47 @@ describe("issue execution policy routes", () => {
       );
     });
 
+    it("rejects in_review transition with only a stale existing monitor", async () => {
+      mockIssueService.getById.mockResolvedValue(baseIssue({
+        monitorNextCheckAt: new Date("2000-01-01T00:00:00.000Z"),
+      }));
+
+      const res = await request(await createApp())
+        .patch(`/api/issues/${issueId}`)
+        .send({ status: "in_review" });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({
+        error: "in_review_requires_liveness",
+        validPaths: ["executionPolicy", "interaction", "monitor", "scheduledRetry"],
+      });
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects in_review transition with only a stale policy monitor", async () => {
+      mockIssueService.getById.mockResolvedValue(baseIssue());
+
+      const res = await request(await createApp())
+        .patch(`/api/issues/${issueId}`)
+        .send({
+          status: "in_review",
+          executionPolicy: {
+            monitor: {
+              nextCheckAt: "2000-01-01T00:00:00.000Z",
+              scheduledBy: "board",
+              notes: "Expired external QA wait",
+            },
+          },
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({
+        error: "in_review_requires_liveness",
+        validPaths: ["executionPolicy", "interaction", "monitor", "scheduledRetry"],
+      });
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+
     it("allows in_review transition with a future scheduledRetry (HEARTBEAT replay path)", async () => {
       mockIssueService.getById.mockResolvedValue(baseIssue());
       mockIssueService.getCurrentScheduledRetry.mockResolvedValue({

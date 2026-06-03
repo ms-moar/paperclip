@@ -514,20 +514,29 @@ function executionPolicyHasStageWithReviewer(policy: unknown): boolean {
   );
 }
 
+function isFutureDate(value: unknown, nowMs: number): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime()) && value.getTime() > nowMs;
+}
+
+function isFutureDateLike(value: unknown, nowMs: number): boolean {
+  if (isFutureDate(value, nowMs)) return true;
+  if (typeof value !== "string") return false;
+  const parsedMs = Date.parse(value);
+  return !Number.isNaN(parsedMs) && parsedMs > nowMs;
+}
+
 function inReviewMonitorActive(input: {
   existingMonitorNextCheckAt: Date | null;
   patchMonitorNextCheckAt: unknown;
   executionPolicy: unknown;
 }): boolean {
-  if (
-    input.patchMonitorNextCheckAt instanceof Date &&
-    !Number.isNaN(input.patchMonitorNextCheckAt.getTime())
-  ) {
-    return true;
+  const nowMs = Date.now();
+  if (input.patchMonitorNextCheckAt !== undefined) {
+    return isFutureDate(input.patchMonitorNextCheckAt, nowMs);
   }
-  if (input.patchMonitorNextCheckAt === undefined && input.existingMonitorNextCheckAt) return true;
+  if (isFutureDate(input.existingMonitorNextCheckAt, nowMs)) return true;
   const normalized = normalizeIssueExecutionPolicy(input.executionPolicy ?? null);
-  return Boolean(normalized?.monitor?.nextCheckAt);
+  return isFutureDateLike(normalized?.monitor?.nextCheckAt, nowMs);
 }
 
 function executionPrincipalsEqual(
