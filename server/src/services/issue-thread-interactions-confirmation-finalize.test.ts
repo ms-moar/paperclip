@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.ts";
+import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 
 const mockIssueUpdate = vi.fn();
 const mockCreateChild = vi.fn();
