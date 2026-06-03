@@ -42,6 +42,20 @@ function hasExecutionPolicyStageReviewer(policy: unknown): boolean {
   );
 }
 
+function isFutureAt(value: unknown, reference: Date): boolean {
+  const referenceMs = reference.getTime();
+  if (value instanceof Date) {
+    return !Number.isNaN(value.getTime()) && value.getTime() > referenceMs;
+  }
+  if (typeof value !== "string") return false;
+  const parsedMs = Date.parse(value);
+  return !Number.isNaN(parsedMs) && parsedMs > referenceMs;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
 async function main() {
   const days = parseDays();
   const config = loadConfig();
@@ -97,21 +111,26 @@ async function main() {
     const issue = await db.query.issues
       ? await db.query.issues.findFirst({ where: eq(issueRows.id, issueId) })
       : (await db.select().from(issueRows).where(eq(issueRows.id, issueId)).limit(1))[0];
+    const issuePolicy = normalizeIssueExecutionPolicy(issue?.executionPolicy ?? null);
+    const detailsPolicy = normalizeIssueExecutionPolicy(details.executionPolicy ?? null);
     let satisfied = false;
 
     if (issue && hasExecutionPolicyStageReviewer(issue.executionPolicy)) {
       satisfied = true;
     }
 
-    // (2) monitor — embed in details (executionState.monitor) OR current monitorNextCheckAt set at/before transition.
+    // (2) monitor — match the runtime guard: only a scheduled monitor whose
+    // next check is still in the future relative to the transition is liveness.
     if (!satisfied) {
-      const detailsExecutionState =
-        (details.executionState as Record<string, unknown> | undefined) ?? null;
-      const monitorFromDetails =
-        detailsExecutionState && (detailsExecutionState as Record<string, unknown>).monitor;
-      if (monitorFromDetails && typeof monitorFromDetails === "object") {
-        satisfied = true;
-      } else if (issue && issue.monitorNextCheckAt && issue.monitorNextCheckAt <= transitionAt) {
+      const detailsExecutionState = asRecord(details.executionState);
+      const monitorFromDetails = asRecord(detailsExecutionState?.monitor);
+      if (
+        isFutureAt(details.monitorNextCheckAt, transitionAt) ||
+        isFutureAt(monitorFromDetails?.nextCheckAt, transitionAt) ||
+        isFutureAt(detailsPolicy?.monitor?.nextCheckAt, transitionAt) ||
+        isFutureAt(issue?.monitorNextCheckAt ?? null, transitionAt) ||
+        isFutureAt(issuePolicy?.monitor?.nextCheckAt, transitionAt)
+      ) {
         satisfied = true;
       }
     }
