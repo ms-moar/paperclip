@@ -13,6 +13,46 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// --- Session actor cache ----------------------------------------------------
+// Resolving the session-backed board actor costs ~4 DB round-trips per request
+// (better-auth session+user lookup, then the instance-admin role and active
+// company memberships). The UI fires ~15 requests per page load, so this
+// dominates perceived latency. Cache the resolved actor keyed by the session
+// credential (the cookie header) for a short TTL: permission / membership /
+// logout changes propagate within TTL seconds. The per-request runId is never
+// cached — it is re-applied from the request header on every cache hit.
+const ACTOR_CACHE_TTL_MS = 5_000;
+const ACTOR_CACHE_MAX_ENTRIES = 5_000;
+
+type CachedActorEntry = { actor: Express.Request["actor"]; expiresAt: number };
+const actorCache = new Map<string, CachedActorEntry>();
+
+function getCachedActor(key: string): Express.Request["actor"] | null {
+  const entry = actorCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    actorCache.delete(key);
+    return null;
+  }
+  // Refresh recency so eviction drops the least-recently-used entry.
+  actorCache.delete(key);
+  actorCache.set(key, entry);
+  return entry.actor;
+}
+
+function setCachedActor(key: string, actor: Express.Request["actor"]): void {
+  if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
+    const oldest = actorCache.keys().next().value;
+    if (oldest !== undefined) actorCache.delete(oldest);
+  }
+  actorCache.set(key, { actor, expiresAt: Date.now() + ACTOR_CACHE_TTL_MS });
+}
+
+/** Drop all cached actors. Exposed for tests and operational invalidation. */
+export function clearActorCache(): void {
+  actorCache.clear();
+}
+
 interface ActorMiddlewareOptions {
   deploymentMode: DeploymentMode;
   resolveSession?: (req: Request) => Promise<BetterAuthSessionResult | null>;
@@ -46,6 +86,19 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           };
           next();
           return;
+        }
+
+        // Fast path: reuse a recently-resolved actor for this exact session
+        // credential, skipping the session + role + membership DB lookups.
+        const cookieHeader = req.header("cookie") ?? "";
+        const sessionCacheKey = cookieHeader ? `sess:${hashToken(cookieHeader)}` : "";
+        if (sessionCacheKey) {
+          const cachedActor = getCachedActor(sessionCacheKey);
+          if (cachedActor) {
+            req.actor = { ...cachedActor, runId: runIdHeader ?? undefined };
+            next();
+            return;
+          }
         }
 
         let session: BetterAuthSessionResult | null = null;
@@ -91,6 +144,9 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             runId: runIdHeader ?? undefined,
             source: "session",
           };
+          // Cache for subsequent requests carrying the same session cookie. The
+          // runId baked in here is overwritten from the header on every hit.
+          if (sessionCacheKey) setCachedActor(sessionCacheKey, req.actor);
           next();
           return;
         }
@@ -102,6 +158,16 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
 
     const token = authHeader.slice("bearer ".length).trim();
     if (!token) {
+      next();
+      return;
+    }
+
+    // Fast path: board API keys (used heavily by automation/CLI) resolve to the
+    // same access on every request. Cache keyed by the token, same short TTL.
+    const boardCacheKey = `board:${hashToken(token)}`;
+    const cachedBoardActor = getCachedActor(boardCacheKey);
+    if (cachedBoardActor) {
+      req.actor = { ...cachedBoardActor, runId: runIdHeader || undefined };
       next();
       return;
     }
@@ -123,6 +189,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           runId: runIdHeader || undefined,
           source: "board_key",
         };
+        setCachedActor(boardCacheKey, req.actor);
         next();
         return;
       }
