@@ -108,6 +108,7 @@ describe("harness-history service", () => {
     expect(log).toContain("Run-Id: run-1");
     expect(log).toContain("Issue-Identifier: MAD-256");
     expect(log).toContain("Files: 1");
+    expect(log).toContain("Path: /tmp/companies/c1/agents/a1/instructions/AGENTS.md");
   });
 
   it("U2: forbidden path → 422 harness-history-path-guard", async () => {
@@ -244,6 +245,8 @@ describe("harness-history service", () => {
     expect(log).toContain("Issue-Identifier: MAD-256");
     expect(log).toContain("Trigger: POST /api/companies/import");
     expect(log).toContain("Files: 2");
+    expect(log).toContain("Path: companies/c1/agents/a1/instructions/AGENTS.md");
+    expect(log).toContain("Path: companies/c1/agents/a1/instructions/HEARTBEAT.md");
     expect(log).toContain("Import-Id: import-uuid-1");
     expect(log).toContain("Agent-Slug: senior-engineer");
   });

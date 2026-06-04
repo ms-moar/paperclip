@@ -274,6 +274,9 @@ describe("agent instructions bundle routes", () => {
       "AGENTS.md",
       "# Updated Agent\n",
       { clearLegacyPromptTemplate: true },
+      expect.objectContaining({
+        trigger: "PUT /api/agents/:id/instructions-bundle/file",
+      }),
     );
     expect(mockAgentService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
@@ -396,5 +399,66 @@ describe("agent instructions bundle routes", () => {
     expect(res.body.adapterConfig.instructionsRootPath).toBeUndefined();
     expect(res.body.adapterConfig.instructionsEntryFile).toBeUndefined();
     expect(res.body.adapterConfig.instructionsFilePath).toBeUndefined();
+  });
+
+  // Route-level fix #2: HarnessHistoryWriteCtx must carry the issueId +
+  // identifier resolved from the actor's heartbeatRuns row, so commit
+  // trailers contain `Issue-Id: <uuid>` and `Issue-Identifier: MAD-NNN`
+  // instead of `none`/`none`. Verifies resolveIssueCtxFromRunId joins
+  // heartbeat_runs.context_snapshot ->> 'issueId' to issues.identifier.
+  it("propagates issueId/issueIdentifier from heartbeat run snapshot into write ctx", async () => {
+    const runId = "33333333-3333-4333-8333-333333333333";
+    const issueId = "44444444-4444-4444-8444-444444444444";
+    const issueIdentifier = "MAD-256";
+
+    const dbMock = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue([{ issueId, issueIdentifier }]),
+    };
+
+    const [{ agentRoutes }, { errorHandler }] = await Promise.all([
+      vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
+      vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
+    ]);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = {
+        type: "board",
+        userId: "local-board",
+        companyIds: ["company-1"],
+        source: "local_implicit",
+        runId,
+        isInstanceAdmin: false,
+      };
+      next();
+    });
+    app.use("/api", agentRoutes(dbMock as any));
+    app.use(errorHandler);
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .put("/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle/file?companyId=company-1")
+      .send({
+        path: "AGENTS.md",
+        content: "# Updated Agent\n",
+      }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(dbMock.limit).toHaveBeenCalled();
+    expect(mockAgentInstructionsService.writeFile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "11111111-1111-4111-8111-111111111111" }),
+      "AGENTS.md",
+      "# Updated Agent\n",
+      expect.any(Object),
+      expect.objectContaining({
+        runId,
+        issueId,
+        issueIdentifier,
+        trigger: "PUT /api/agents/:id/instructions-bundle/file",
+      }),
+    );
   });
 });

@@ -108,6 +108,14 @@ function formatTrailers(ctx: HarnessHistoryContext): string {
   lines.push(`Issue-Identifier: ${ctx.issueIdentifier ?? "none"}`);
   lines.push(`Trigger: ${ctx.trigger ?? ctx.reason}`);
   lines.push(`Files: ${ctx.paths.length}`);
+  // Emit one `Path:` trailer per ctx.paths entry so forensics has concrete
+  // path-level evidence, not just a count. Multi-valued trailers parse cleanly
+  // with `git interpret-trailers --parse`. Wrapper enforces size-cap (returns
+  // `size-cap|too large` → HttpError 422), so we don't truncate here — let
+  // the wrapper reject oversized batches as fail-closed signal.
+  for (const p of ctx.paths) {
+    lines.push(`Path: ${p}`);
+  }
   lines.push(`Import-Id: ${ctx.importId ?? "none"}`);
   lines.push(`Agent-Slug: ${ctx.agentSlug ?? "none"}`);
   lines.push(`Reverted-Agent-Slug: ${ctx.revertedAgentSlug ?? "none"}`);

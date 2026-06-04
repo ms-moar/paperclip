@@ -129,6 +129,9 @@ describe("agent-instructions service — harness-history write hooks (W1-W5)", (
     expect(log).toContain("agent.instructions_file_updated");
     expect(log).toContain("Actor-Type: agent");
     expect(log).toContain("Issue-Identifier: MAD-256");
+    // ctx.paths must be embedded as `Path:` trailer lines so forensics has the
+    // concrete file path that triggered the write, not just `Files: N`.
+    expect(log).toMatch(/Path: \S*NOTES\.md/);
   });
 
   // W1 — writeFile without ctx must NOT call wrapper

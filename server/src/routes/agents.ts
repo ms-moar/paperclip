@@ -1064,16 +1064,55 @@ export function agentRoutes(
     return path.resolve(cwd, trimmed);
   }
 
-  function harnessCtxFromActor(
+  async function resolveIssueCtxFromRunId(
+    runId: string | null,
+  ): Promise<{ issueId: string | null; issueIdentifier: string | null }> {
+    if (!runId || !isUuidLike(runId)) {
+      return { issueId: null, issueIdentifier: null };
+    }
+    try {
+      const rows = await db
+        .select({
+          issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`.as("issueId"),
+          issueIdentifier: issuesTable.identifier,
+        })
+        .from(heartbeatRuns)
+        .leftJoin(
+          issuesTable,
+          eq(
+            issuesTable.id,
+            sql`(${heartbeatRuns.contextSnapshot} ->> 'issueId')::uuid`,
+          ),
+        )
+        .where(eq(heartbeatRuns.id, runId))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return { issueId: null, issueIdentifier: null };
+      return {
+        issueId: row.issueId ?? null,
+        issueIdentifier: row.issueIdentifier ?? null,
+      };
+    } catch {
+      // Run lookup is best-effort metadata; never fail the write because the
+      // resolver hit a malformed runId or transient DB error. fail-closed is
+      // owned by the wrapper / path-guard / secret-hit branches.
+      return { issueId: null, issueIdentifier: null };
+    }
+  }
+
+  async function harnessCtxFromActor(
     actor: ReturnType<typeof getActorInfo>,
     trigger: string,
-  ): HarnessHistoryWriteCtx {
+  ): Promise<HarnessHistoryWriteCtx> {
+    const issueCtx = await resolveIssueCtxFromRunId(actor.runId);
     return {
       actor: {
         type: actor.actorType === "agent" ? "agent" : "board-user",
         id: actor.actorId,
       },
       runId: actor.runId,
+      issueId: issueCtx.issueId,
+      issueIdentifier: issueCtx.issueIdentifier,
       trigger,
     };
   }
@@ -2035,7 +2074,7 @@ export function agentRoutes(
     const agent = await materializeDefaultInstructionsBundleForNewAgent(
       createdAgent,
       instructionsBundle,
-      harnessCtxFromActor(actor, "POST /api/agents"),
+      await harnessCtxFromActor(actor, "POST /api/agents"),
     );
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
@@ -2215,7 +2254,7 @@ export function agentRoutes(
     const agent = await materializeDefaultInstructionsBundleForNewAgent(
       createdAgent,
       instructionsBundle,
-      harnessCtxFromActor(actor, "POST /api/companies/:id/agents"),
+      await harnessCtxFromActor(actor, "POST /api/companies/:id/agents"),
     );
     const agentEnv = asRecord(agent.adapterConfig)?.env;
     if (agentEnv) {
@@ -2434,7 +2473,7 @@ export function agentRoutes(
     const { bundle, adapterConfig } = await instructions.updateBundle(
       existing,
       req.body,
-      harnessCtxFromActor(actor, "PATCH /api/agents/:id/instructions-bundle"),
+      await harnessCtxFromActor(actor, "PATCH /api/agents/:id/instructions-bundle"),
     );
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
@@ -2506,7 +2545,7 @@ export function agentRoutes(
       req.body.path,
       req.body.content,
       { clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate },
-      harnessCtxFromActor(actor, "PUT /api/agents/:id/instructions-bundle/file"),
+      await harnessCtxFromActor(actor, "PUT /api/agents/:id/instructions-bundle/file"),
     );
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
@@ -2563,7 +2602,7 @@ export function agentRoutes(
     const result = await instructions.deleteFile(
       existing,
       relativePath,
-      harnessCtxFromActor(actor, "DELETE /api/agents/:id/instructions-bundle/file"),
+      await harnessCtxFromActor(actor, "DELETE /api/agents/:id/instructions-bundle/file"),
     );
     await logActivity(db, {
       companyId: existing.companyId,
