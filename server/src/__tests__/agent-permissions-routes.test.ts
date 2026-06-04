@@ -395,7 +395,9 @@ describe.sequential("agent permission routes", () => {
   });
 
   it("redacts agent detail for authenticated company members without agent admin permission", async () => {
-    mockAccessService.canUser.mockResolvedValue(false);
+    mockAccessService.canUser.mockImplementation(async (_companyId?: string, _userId?: string, permKey?: string) => {
+      return permKey === "agents:view_all";
+    });
 
     const app = await createApp({
       type: "board",

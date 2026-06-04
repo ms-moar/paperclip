@@ -650,6 +650,10 @@ describe.sequential("agent skill routes", () => {
         "TOOLS.md": expect.stringContaining("# Tools"),
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },
+      expect.objectContaining({
+        actor: expect.objectContaining({ type: expect.any(String) }),
+        trigger: expect.stringContaining("POST /api/companies/:id/agents"),
+      }),
     );
   });
 
@@ -675,6 +679,10 @@ describe.sequential("agent skill routes", () => {
           "AGENTS.md": expect.stringMatching(/Start actionable work in the same heartbeat\.[\s\S]*Keep the work moving until it is done\./),
         }),
         { entryFile: "AGENTS.md", replaceExisting: false },
+        expect.objectContaining({
+          actor: expect.objectContaining({ type: expect.any(String) }),
+          trigger: expect.stringContaining("POST /api/companies/:id/agents"),
+        }),
       );
       expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
         expect.any(Object),
@@ -682,12 +690,14 @@ describe.sequential("agent skill routes", () => {
           "AGENTS.md": expect.stringContaining('kind: "request_confirmation"'),
         }),
         expect.any(Object),
+        expect.any(Object),
       );
       expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({
           "AGENTS.md": expect.stringContaining("confirmation:{issueId}:plan:{revisionId}"),
         }),
+        expect.any(Object),
         expect.any(Object),
       );
     });
