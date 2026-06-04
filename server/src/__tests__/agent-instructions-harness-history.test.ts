@@ -337,6 +337,57 @@ describe("agent-instructions service — harness-history write hooks (W1-W5)", (
     expect(guideExists).toBe(false);
   });
 
+  // W4 rollback — legacy-only agent must not leak auto-materialised AGENTS.md when
+  // commit-on-write later rejects the target file write.
+  it("W4 rollback: writeFile on legacy-only agent leaves no auto-materialised AGENTS.md and no NEW.md", async () => {
+    const paperclipHome = await makeTempDir("paperclip-ai-hh-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test";
+
+    const wrapperDir = await makeTempDir("paperclip-ai-hh-wrapper-");
+    cleanupDirs.add(wrapperDir);
+    const { wrapperPath } = await installFailingWrapper(wrapperDir, "secret-hit");
+    process.env.PAPERCLIP_HARNESS_HISTORY_WRAPPER = wrapperPath;
+
+    // Legacy-only agent: no managed bundle on disk, no instructionsRootPath,
+    // only promptTemplate which ensureWritableBundle would materialise into AGENTS.md.
+    const expectedRoot = path.join(
+      paperclipHome,
+      "instances",
+      "test",
+      "companies",
+      "company-1",
+      "agents",
+      "agent-1",
+      "instructions",
+    );
+    const rootExistedBefore = await fs.access(expectedRoot).then(() => true).catch(() => false);
+    expect(rootExistedBefore).toBe(false);
+
+    const agent = {
+      id: "agent-1",
+      companyId: "company-1",
+      name: "Agent 1",
+      adapterConfig: {
+        promptTemplate: "LEGACY_SECRET=sk-legacy-should-not-materialize\n",
+      },
+    };
+    const svc = agentInstructionsService();
+
+    await expect(
+      svc.writeFile(agent, "NEW.md", "SECRET=sk-leak-must-not-persist\n", undefined, testCtx),
+    ).rejects.toThrow();
+
+    const newExists = await fs.access(path.join(expectedRoot, "NEW.md")).then(() => true).catch(() => false);
+    const agentsExists = await fs
+      .access(path.join(expectedRoot, "AGENTS.md"))
+      .then(() => true)
+      .catch(() => false);
+    expect(newExists).toBe(false);
+    expect(agentsExists).toBe(false);
+  });
+
   it("W5 rollback: materializeManagedBundle commit failure into empty root removes any newly-written files", async () => {
     const { managedRoot } = await setupWithFailingWrapper("secret-hit");
     // Wipe the root so previous tree is empty (no AGENTS.md to restore)

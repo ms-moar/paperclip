@@ -699,16 +699,33 @@ export function agentInstructionsService() {
       return { bundle, file, adapterConfig };
     }
 
-    const prepared = await ensureWritableBundle(agent, options);
-    const absolutePath = resolvePathWithinRoot(prepared.state.rootPath!, relativePath);
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-
     const snapshotEnabled = Boolean(ctx) && harnessHistoryService.isEnabled();
-    const snapshot = snapshotEnabled
-      ? await harnessHistoryService.captureSnapshot([absolutePath])
-      : null;
 
+    // Pre-snapshot the target file AND any path ensureWritableBundle could materialise
+    // from the legacy promptTemplate (W4). For a legacy-only agent ensureWritableBundle
+    // creates the managed root and writes AGENTS.md before the rest of the write happens,
+    // so the snapshot must be captured BEFORE that call to keep the whole envelope
+    // fail-closed when commit-on-write later rejects (secret-hit/path-guard/size-cap).
+    let snapshot: Awaited<ReturnType<typeof harnessHistoryService.captureSnapshot>> | null = null;
+    if (snapshotEnabled) {
+      const recovered = await recoverManagedBundleState(agent, current);
+      const effectiveRootPath = recovered.rootPath && recovered.mode
+        ? recovered.rootPath
+        : resolveManagedInstructionsRoot(agent);
+      const effectiveEntryFile = recovered.entryFile || ENTRY_FILE_DEFAULT;
+      const snapshotPaths = new Set<string>([
+        resolvePathWithinRoot(effectiveRootPath, relativePath),
+        resolvePathWithinRoot(effectiveRootPath, effectiveEntryFile),
+      ]);
+      snapshot = await harnessHistoryService.captureSnapshot([...snapshotPaths]);
+    }
+
+    let prepared: Awaited<ReturnType<typeof ensureWritableBundle>>;
+    let absolutePath: string;
     try {
+      prepared = await ensureWritableBundle(agent, options);
+      absolutePath = resolvePathWithinRoot(prepared.state.rootPath!, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, content, "utf8");
       if (ctx) {
         await harnessHistoryService.commitOnWrite({
