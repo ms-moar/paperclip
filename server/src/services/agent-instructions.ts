@@ -10,6 +10,7 @@ export interface HarnessHistoryWriteCtx {
   issueId?: string | null;
   issueIdentifier?: string | null;
   agentSlug?: string | null;
+  importId?: string | null;
   trigger?: string;
 }
 

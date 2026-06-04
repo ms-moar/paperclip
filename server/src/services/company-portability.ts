@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
@@ -54,12 +54,14 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { requireOpenCodeModelId } from "@paperclipai/adapter-opencode-local/server";
 import { findServerAdapter } from "../adapters/index.js";
-import { forbidden, notFound, unprocessable } from "../errors.js";
+import { forbidden, notFound, unprocessable, HttpError } from "../errors.js";
 import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import type { StorageService } from "../storage/types.js";
 import { accessService } from "./access.js";
 import { agentService } from "./agents.js";
-import { agentInstructionsService } from "./agent-instructions.js";
+import { agentInstructionsService, type HarnessHistoryWriteCtx } from "./agent-instructions.js";
+import { harnessHistoryService } from "./harness-history.js";
+import { logActivity } from "./activity-log.js";
 import { assetService } from "./assets.js";
 import { generateReadme } from "./company-export-readme.js";
 import { renderOrgChartPng, type OrgNode } from "../routes/org-chart-svg.js";
@@ -4065,6 +4067,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
       throw unprocessable("Safe import routes only allow create or skip actions.");
     }
 
+    const importId = randomUUID();
+    await harnessHistoryService.createPreImportTag(importId);
+
     const sourceManifest = plan.source.manifest;
     const warnings = [...plan.preview.warnings];
     const include = plan.include;
@@ -4320,13 +4325,41 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
             });
             continue;
           }
+          const importCtxUpdate: HarnessHistoryWriteCtx = {
+            actor: { type: "company-import", id: actorUserId ?? "system" },
+            importId,
+            agentSlug: planAgent.slug,
+          };
           try {
             const materialized = await instructions.materializeManagedBundle(updated, bundleFiles, {
               clearLegacyPromptTemplate: true,
               replaceExisting: true,
-            });
+            }, importCtxUpdate);
             updated = await agents.update(updated.id, { adapterConfig: materialized.adapterConfig }) ?? updated;
           } catch (err) {
+            if (err instanceof HttpError) {
+              await harnessHistoryService.revertAgentBundle({
+                importId,
+                companyId: targetCompany.id,
+                agentId: updated.id,
+                revertedAgentSlug: planAgent.slug,
+                boardUserId: actorUserId ?? "system",
+              }).catch(() => {});
+              await logActivity(db, {
+                companyId: targetCompany.id,
+                actorType: "user",
+                actorId: actorUserId ?? "system",
+                action: "company.import_partial_failure",
+                entityType: "agent",
+                entityId: updated.id,
+                details: { importId, agentSlug: planAgent.slug, error: err.message },
+              }).catch(() => {});
+              throw new HttpError(503, "harness-history-import-partial-failure", {
+                importId,
+                agentSlug: planAgent.slug,
+                cause: err.message,
+              });
+            }
             warnings.push(`Failed to materialize instructions bundle for ${manifestAgent.slug}: ${err instanceof Error ? err.message : String(err)}`);
           }
           agentStatusById.set(updated.id, updated.status ?? agentStatusById.get(updated.id) ?? null);
@@ -4356,13 +4389,41 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           true,
           actorUserId ?? null,
         );
+        const importCtxCreate: HarnessHistoryWriteCtx = {
+          actor: { type: "company-import", id: actorUserId ?? "system" },
+          importId,
+          agentSlug: planAgent.slug,
+        };
         try {
           const materialized = await instructions.materializeManagedBundle(created, bundleFiles, {
             clearLegacyPromptTemplate: true,
             replaceExisting: true,
-          });
+          }, importCtxCreate);
           created = await agents.update(created.id, { adapterConfig: materialized.adapterConfig }) ?? created;
         } catch (err) {
+          if (err instanceof HttpError) {
+            await harnessHistoryService.revertAgentBundle({
+              importId,
+              companyId: targetCompany.id,
+              agentId: created.id,
+              revertedAgentSlug: planAgent.slug,
+              boardUserId: actorUserId ?? "system",
+            }).catch(() => {});
+            await logActivity(db, {
+              companyId: targetCompany.id,
+              actorType: "user",
+              actorId: actorUserId ?? "system",
+              action: "company.import_partial_failure",
+              entityType: "agent",
+              entityId: created.id,
+              details: { importId, agentSlug: planAgent.slug, error: err.message },
+            }).catch(() => {});
+            throw new HttpError(503, "harness-history-import-partial-failure", {
+              importId,
+              agentSlug: planAgent.slug,
+              cause: err.message,
+            });
+          }
           warnings.push(`Failed to materialize instructions bundle for ${manifestAgent.slug}: ${err instanceof Error ? err.message : String(err)}`);
         }
         agentStatusById.set(created.id, created.status ?? createdStatus);

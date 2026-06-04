@@ -41,6 +41,7 @@ import {
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
+import { harnessHistoryService } from "./services/harness-history.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -689,6 +690,14 @@ export async function startServer(): Promise<StartedServer> {
     deploymentMode: config.deploymentMode,
     resolveSessionFromHeaders,
   });
+
+  void harnessHistoryService.probeWrapper()
+    .then(() => {
+      logger.info("harness-history wrapper probe passed");
+    })
+    .catch((err: unknown) => {
+      logger.warn({ err }, "harness-history wrapper probe failed — writes will be silent passthrough until wrapper is installed");
+    });
 
   void reconcilePersistedRuntimeServicesOnStartup(db as any)
     .then((result) => {
