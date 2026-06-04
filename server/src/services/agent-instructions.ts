@@ -625,13 +625,43 @@ export function agentInstructionsService() {
 
     const existingFiles = await listFilesRecursive(nextRootPath);
     const exported = await exportFiles(agent);
+
+    const snapshotEnabled = Boolean(ctx) && harnessHistoryService.isEnabled();
+    const snapshotRelPaths = new Set<string>([nextEntryFile, ...existingFiles]);
     if (existingFiles.length === 0) {
-      await writeBundleFiles(nextRootPath, exported.files);
+      for (const key of Object.keys(exported.files)) snapshotRelPaths.add(normalizeRelativeFilePath(key));
     }
-    const refreshedFiles = existingFiles.length === 0 ? await listFilesRecursive(nextRootPath) : existingFiles;
-    if (!refreshedFiles.includes(nextEntryFile)) {
-      const nextEntryContent = exported.files[nextEntryFile] ?? exported.files[exported.entryFile] ?? "";
-      await writeBundleFiles(nextRootPath, { [nextEntryFile]: nextEntryContent });
+    const snapshotAbsPaths = [...snapshotRelPaths].map((rel) => resolvePathWithinRoot(nextRootPath, rel));
+    const snapshot = snapshotEnabled
+      ? await harnessHistoryService.captureSnapshot(snapshotAbsPaths)
+      : null;
+
+    try {
+      if (existingFiles.length === 0) {
+        await writeBundleFiles(nextRootPath, exported.files);
+      }
+      const refreshedFiles = existingFiles.length === 0 ? await listFilesRecursive(nextRootPath) : existingFiles;
+      if (!refreshedFiles.includes(nextEntryFile)) {
+        const nextEntryContent = exported.files[nextEntryFile] ?? exported.files[exported.entryFile] ?? "";
+        await writeBundleFiles(nextRootPath, { [nextEntryFile]: nextEntryContent });
+      }
+
+      if (ctx) {
+        await harnessHistoryService.commitOnWrite({
+          reason: "agent.instructions_bundle_updated",
+          paths: [nextRootPath],
+          ...ctx,
+        });
+      }
+    } catch (err) {
+      if (snapshot) {
+        try {
+          await harnessHistoryService.restoreSnapshot(snapshot);
+        } catch {
+          // swallow restore failures to preserve the original error
+        }
+      }
+      throw err;
     }
 
     const nextConfig = applyBundleConfig(state.config, {
@@ -640,13 +670,6 @@ export function agentInstructionsService() {
       entryFile: nextEntryFile,
       clearLegacyPromptTemplate: input.clearLegacyPromptTemplate,
     });
-    if (ctx) {
-      await harnessHistoryService.commitOnWrite({
-        reason: "agent.instructions_bundle_updated",
-        paths: [nextRootPath],
-        ...ctx,
-      });
-    }
     const nextBundle = await getBundle({ ...agent, adapterConfig: nextConfig });
     return { bundle: nextBundle, adapterConfig: nextConfig };
   }
@@ -679,14 +702,32 @@ export function agentInstructionsService() {
     const prepared = await ensureWritableBundle(agent, options);
     const absolutePath = resolvePathWithinRoot(prepared.state.rootPath!, relativePath);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, content, "utf8");
-    if (ctx) {
-      await harnessHistoryService.commitOnWrite({
-        reason: "agent.instructions_file_updated",
-        paths: [absolutePath],
-        ...ctx,
-      });
+
+    const snapshotEnabled = Boolean(ctx) && harnessHistoryService.isEnabled();
+    const snapshot = snapshotEnabled
+      ? await harnessHistoryService.captureSnapshot([absolutePath])
+      : null;
+
+    try {
+      await fs.writeFile(absolutePath, content, "utf8");
+      if (ctx) {
+        await harnessHistoryService.commitOnWrite({
+          reason: "agent.instructions_file_updated",
+          paths: [absolutePath],
+          ...ctx,
+        });
+      }
+    } catch (err) {
+      if (snapshot) {
+        try {
+          await harnessHistoryService.restoreSnapshot(snapshot);
+        } catch {
+          // swallow restore failures to preserve the original error
+        }
+      }
+      throw err;
     }
+
     const nextAgent = { ...agent, adapterConfig: prepared.adapterConfig };
     const [bundle, file] = await Promise.all([
       getBundle(nextAgent),
@@ -714,14 +755,32 @@ export function agentInstructionsService() {
       throw unprocessable("Cannot delete the bundle entry file");
     }
     const absolutePath = resolvePathWithinRoot(state.rootPath, normalizedPath);
-    await fs.rm(absolutePath, { force: true });
-    if (ctx) {
-      await harnessHistoryService.commitOnWrite({
-        reason: "agent.instructions_file_deleted",
-        paths: [absolutePath],
-        ...ctx,
-      });
+
+    const snapshotEnabled = Boolean(ctx) && harnessHistoryService.isEnabled();
+    const snapshot = snapshotEnabled
+      ? await harnessHistoryService.captureSnapshot([absolutePath])
+      : null;
+
+    try {
+      await fs.rm(absolutePath, { force: true });
+      if (ctx) {
+        await harnessHistoryService.commitOnWrite({
+          reason: "agent.instructions_file_deleted",
+          paths: [absolutePath],
+          ...ctx,
+        });
+      }
+    } catch (err) {
+      if (snapshot) {
+        try {
+          await harnessHistoryService.restoreSnapshot(snapshot);
+        } catch {
+          // swallow restore failures to preserve the original error
+        }
+      }
+      throw err;
     }
+
     const adapterConfig = buildPersistedBundleConfig(derived, state);
     const bundle = await getBundle({ ...agent, adapterConfig });
     return { bundle, adapterConfig };
@@ -783,33 +842,58 @@ export function agentInstructionsService() {
     const entryFile = options?.entryFile ? normalizeRelativeFilePath(options.entryFile) : ENTRY_FILE_DEFAULT;
     const effectiveFiles = await applyCompanyLanguagePolicyOverlay(agent, files, entryFile);
 
-    if (options?.replaceExisting) {
-      await fs.rm(rootPath, { recursive: true, force: true });
-    }
-    await fs.mkdir(rootPath, { recursive: true });
-
     const normalizedEntries = Object.entries(effectiveFiles).map(([relativePath, content]) => [
       normalizeRelativeFilePath(relativePath),
       content,
     ] as const);
-    const writtenPaths: string[] = [];
-    for (const [relativePath, content] of normalizedEntries) {
-      const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, content, "utf8");
-      writtenPaths.push(absolutePath);
+    const plannedRelPaths = new Set<string>(normalizedEntries.map(([rel]) => rel));
+    if (!normalizedEntries.some(([rel]) => rel === entryFile)) {
+      plannedRelPaths.add(entryFile);
     }
-    if (!normalizedEntries.some(([relativePath]) => relativePath === entryFile)) {
-      const entryAbsPath = resolvePathWithinRoot(rootPath, entryFile);
-      await fs.writeFile(entryAbsPath, "", "utf8");
-      writtenPaths.push(entryAbsPath);
+
+    const snapshotEnabled = Boolean(ctx) && harnessHistoryService.isEnabled();
+    let snapshot: Awaited<ReturnType<typeof harnessHistoryService.captureSnapshot>> | null = null;
+    if (snapshotEnabled) {
+      const existingRel = await listFilesRecursive(rootPath);
+      const allRel = new Set<string>([...existingRel, ...plannedRelPaths]);
+      const allAbs = [...allRel].map((rel) => resolvePathWithinRoot(rootPath, rel));
+      snapshot = await harnessHistoryService.captureSnapshot(allAbs);
     }
-    if (ctx) {
-      await harnessHistoryService.commitOnWrite({
-        reason: "agent.instructions_bundle_materialise",
-        paths: writtenPaths.length > 0 ? writtenPaths : [rootPath],
-        ...ctx,
-      });
+
+    try {
+      if (options?.replaceExisting) {
+        await fs.rm(rootPath, { recursive: true, force: true });
+      }
+      await fs.mkdir(rootPath, { recursive: true });
+
+      const writtenPaths: string[] = [];
+      for (const [relativePath, content] of normalizedEntries) {
+        const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, content, "utf8");
+        writtenPaths.push(absolutePath);
+      }
+      if (!normalizedEntries.some(([relativePath]) => relativePath === entryFile)) {
+        const entryAbsPath = resolvePathWithinRoot(rootPath, entryFile);
+        await fs.writeFile(entryAbsPath, "", "utf8");
+        writtenPaths.push(entryAbsPath);
+      }
+      if (ctx) {
+        await harnessHistoryService.commitOnWrite({
+          reason: "agent.instructions_bundle_materialise",
+          paths: writtenPaths.length > 0 ? writtenPaths : [rootPath],
+          ...ctx,
+        });
+      }
+    } catch (err) {
+      if (snapshot) {
+        try {
+          await harnessHistoryService.restoreSnapshot(snapshot);
+        } catch {
+          // swallow restore failures to preserve the original error
+        }
+      }
+      throw err;
     }
 
     const adapterConfig = applyBundleConfig(asRecord(agent.adapterConfig), {

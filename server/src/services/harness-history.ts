@@ -7,6 +7,7 @@
 // fail-closed semantics described in plan §5.
 
 import fs from "node:fs/promises";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { HttpError } from "../errors.js";
 
@@ -226,6 +227,7 @@ export function createHarnessHistoryService(): HarnessHistoryService {
       if (previous === null) {
         await fs.rm(absolutePath, { force: true });
       } else {
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
         await fs.writeFile(absolutePath, previous);
       }
     }

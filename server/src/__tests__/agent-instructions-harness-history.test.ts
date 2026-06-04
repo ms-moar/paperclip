@@ -30,6 +30,26 @@ async function installFakeWrapper(dir: string): Promise<{ wrapperPath: string; l
   return { wrapperPath, logPath };
 }
 
+async function installFailingWrapper(
+  dir: string,
+  reason: "secret-hit" | "path-guard" = "secret-hit",
+): Promise<{ wrapperPath: string }> {
+  const wrapperPath = path.join(dir, "paperclip-harness-history");
+  const script = [
+    "#!/usr/bin/env bash",
+    "set -u",
+    "if [ \"$1\" = \"--version\" ]; then",
+    "  echo 'paperclip-harness-history failing-wrapper'",
+    "  exit 0",
+    "fi",
+    "cat >/dev/null",
+    `printf '%s\\n' ${JSON.stringify(reason + " detected during commit-on-write")} 1>&2`,
+    "exit 1",
+  ].join("\n");
+  await fs.writeFile(wrapperPath, script, { mode: 0o755 });
+  return { wrapperPath };
+}
+
 function makeAgent(adapterConfig: Record<string, unknown>, managedRootPath: string) {
   return {
     id: "agent-1",
@@ -218,5 +238,125 @@ describe("agent-instructions service — harness-history write hooks (W1-W5)", (
 
     const exists = await fs.access(logPath).then(() => true).catch(() => false);
     expect(exists).toBe(false);
+  });
+
+  // ---------- transactional rollback (fail-closed) ----------
+
+  async function setupWithFailingWrapper(reason: "secret-hit" | "path-guard" = "secret-hit"): Promise<{ managedRoot: string }> {
+    const paperclipHome = await makeTempDir("paperclip-ai-hh-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test";
+
+    const wrapperDir = await makeTempDir("paperclip-ai-hh-wrapper-");
+    cleanupDirs.add(wrapperDir);
+    const { wrapperPath } = await installFailingWrapper(wrapperDir, reason);
+    process.env.PAPERCLIP_HARNESS_HISTORY_WRAPPER = wrapperPath;
+
+    const managedRoot = path.join(paperclipHome, "instances", "test", "companies", "company-1", "agents", "agent-1", "instructions");
+    await fs.mkdir(managedRoot, { recursive: true });
+    await fs.writeFile(path.join(managedRoot, "AGENTS.md"), "# Agent\n", "utf8");
+
+    return { managedRoot };
+  }
+
+  it("W1 rollback: writeFile commit failure (secret-hit) leaves no new file and preserves old content", async () => {
+    const { managedRoot } = await setupWithFailingWrapper("secret-hit");
+    const agent = makeAgent({}, managedRoot);
+    const svc = agentInstructionsService();
+
+    const newFile = path.join(managedRoot, "NEW.md");
+    const oldFile = path.join(managedRoot, "AGENTS.md");
+    const oldContent = await fs.readFile(oldFile, "utf8");
+
+    await expect(
+      svc.writeFile(agent, "NEW.md", "SECRET=sk-leak-must-not-persist\n", undefined, testCtx),
+    ).rejects.toThrow();
+    const newExists = await fs.access(newFile).then(() => true).catch(() => false);
+    expect(newExists).toBe(false);
+    expect(await fs.readFile(oldFile, "utf8")).toBe(oldContent);
+  });
+
+  it("W1 rollback: writeFile commit failure on existing file restores previous bytes", async () => {
+    const { managedRoot } = await setupWithFailingWrapper("path-guard");
+    await fs.writeFile(path.join(managedRoot, "NOTES.md"), "before\n", "utf8");
+    const agent = makeAgent({}, managedRoot);
+    const svc = agentInstructionsService();
+
+    await expect(
+      svc.writeFile(agent, "NOTES.md", "after-that-must-rollback\n", undefined, testCtx),
+    ).rejects.toThrow();
+    expect(await fs.readFile(path.join(managedRoot, "NOTES.md"), "utf8")).toBe("before\n");
+  });
+
+  it("W2 rollback: deleteFile commit failure restores the deleted file", async () => {
+    const { managedRoot } = await setupWithFailingWrapper("path-guard");
+    await fs.writeFile(path.join(managedRoot, "KEEP.md"), "must-survive\n", "utf8");
+    const agent = makeAgent({}, managedRoot);
+    const svc = agentInstructionsService();
+
+    await expect(svc.deleteFile(agent, "KEEP.md", testCtx)).rejects.toThrow();
+    expect(await fs.readFile(path.join(managedRoot, "KEEP.md"), "utf8")).toBe("must-survive\n");
+  });
+
+  it("W3 rollback: updateBundle commit failure restores the previous tree", async () => {
+    const { managedRoot } = await setupWithFailingWrapper("secret-hit");
+    // remove AGENTS.md so updateBundle triggers the bundle write path
+    await fs.rm(path.join(managedRoot, "AGENTS.md"), { force: true });
+    await fs.writeFile(path.join(managedRoot, "EXISTING.md"), "keep-me\n", "utf8");
+    const agent = makeAgent({}, managedRoot);
+    const svc = agentInstructionsService();
+
+    await expect(svc.updateBundle(agent, { mode: "managed" }, testCtx)).rejects.toThrow();
+    // EXISTING.md kept
+    expect(await fs.readFile(path.join(managedRoot, "EXISTING.md"), "utf8")).toBe("keep-me\n");
+    // AGENTS.md was missing before — must remain absent after rollback
+    const agentsExists = await fs.access(path.join(managedRoot, "AGENTS.md")).then(() => true).catch(() => false);
+    expect(agentsExists).toBe(false);
+  });
+
+  it("W5 rollback: materializeManagedBundle commit failure restores the previous tree (replaceExisting)", async () => {
+    const { managedRoot } = await setupWithFailingWrapper("secret-hit");
+    await fs.writeFile(path.join(managedRoot, "AGENTS.md"), "# Original Agent\n", "utf8");
+    await fs.writeFile(path.join(managedRoot, "OLD.md"), "# Old\n", "utf8");
+    const agent = makeAgent({}, managedRoot);
+    const svc = agentInstructionsService();
+
+    await expect(
+      svc.materializeManagedBundle(
+        agent,
+        { "AGENTS.md": "# Materialized\n", "GUIDE.md": "## Guide\n" },
+        { replaceExisting: true },
+        testCtx,
+      ),
+    ).rejects.toThrow();
+
+    expect(await fs.readFile(path.join(managedRoot, "AGENTS.md"), "utf8")).toBe("# Original Agent\n");
+    expect(await fs.readFile(path.join(managedRoot, "OLD.md"), "utf8")).toBe("# Old\n");
+    const guideExists = await fs.access(path.join(managedRoot, "GUIDE.md")).then(() => true).catch(() => false);
+    expect(guideExists).toBe(false);
+  });
+
+  it("W5 rollback: materializeManagedBundle commit failure into empty root removes any newly-written files", async () => {
+    const { managedRoot } = await setupWithFailingWrapper("secret-hit");
+    // Wipe the root so previous tree is empty (no AGENTS.md to restore)
+    await fs.rm(managedRoot, { recursive: true, force: true });
+    await fs.mkdir(managedRoot, { recursive: true });
+    const agent = makeAgent({}, managedRoot);
+    const svc = agentInstructionsService();
+
+    await expect(
+      svc.materializeManagedBundle(
+        agent,
+        { "AGENTS.md": "# Materialized\n", "NESTED/INNER.md": "# nested\n" },
+        undefined,
+        testCtx,
+      ),
+    ).rejects.toThrow();
+
+    const agentsExists = await fs.access(path.join(managedRoot, "AGENTS.md")).then(() => true).catch(() => false);
+    const innerExists = await fs.access(path.join(managedRoot, "NESTED", "INNER.md")).then(() => true).catch(() => false);
+    expect(agentsExists).toBe(false);
+    expect(innerExists).toBe(false);
   });
 });
