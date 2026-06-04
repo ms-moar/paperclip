@@ -29,3 +29,5 @@ skills/terminal-bench-loop/SKILL.md
 server/README.md
 ui/README.md
 cli/README.md
+
+.honcho/memory-map.md
