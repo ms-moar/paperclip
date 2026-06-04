@@ -36,6 +36,7 @@ import {
   agentService,
   agentInstructionsService,
   accessService,
+  type HarnessHistoryWriteCtx,
   approvalService,
   companySkillService,
   budgetService,
@@ -1063,6 +1064,20 @@ export function agentRoutes(
     return path.resolve(cwd, trimmed);
   }
 
+  function harnessCtxFromActor(
+    actor: ReturnType<typeof getActorInfo>,
+    trigger: string,
+  ): HarnessHistoryWriteCtx {
+    return {
+      actor: {
+        type: actor.actorType === "agent" ? "agent" : "board-user",
+        id: actor.actorId,
+      },
+      runId: actor.runId,
+      trigger,
+    };
+  }
+
   async function materializeDefaultInstructionsBundleForNewAgent<T extends {
     id: string;
     companyId: string;
@@ -1073,6 +1088,7 @@ export function agentRoutes(
   }>(
     agent: T,
     input?: { files: Record<string, string>; entryFile?: string },
+    ctx?: HarnessHistoryWriteCtx,
   ): Promise<T> {
     if (!adapterSupportsInstructionsBundle(agent.adapterType)) {
       return agent;
@@ -1104,6 +1120,7 @@ export function agentRoutes(
       agent,
       files,
       { entryFile: input?.entryFile ?? "AGENTS.md", replaceExisting: false },
+      ctx,
     );
     const nextAdapterConfig = { ...materialized.adapterConfig };
     delete nextAdapterConfig.promptTemplate;
@@ -2014,10 +2031,14 @@ export function agentRoutes(
       spentMonthlyCents: 0,
       lastHeartbeatAt: null,
     });
-    const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
+    const actor = getActorInfo(req);
+    const agent = await materializeDefaultInstructionsBundleForNewAgent(
+      createdAgent,
+      instructionsBundle,
+      harnessCtxFromActor(actor, "POST /api/agents"),
+    );
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
-    const actor = getActorInfo(req);
 
     if (requiresApproval) {
       const requestedAdapterType = normalizedHireInput.adapterType ?? agent.adapterType;
@@ -2190,7 +2211,12 @@ export function agentRoutes(
       spentMonthlyCents: 0,
       lastHeartbeatAt: null,
     });
-    const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
+    const actor = getActorInfo(req);
+    const agent = await materializeDefaultInstructionsBundleForNewAgent(
+      createdAgent,
+      instructionsBundle,
+      harnessCtxFromActor(actor, "POST /api/companies/:id/agents"),
+    );
     const agentEnv = asRecord(agent.adapterConfig)?.env;
     if (agentEnv) {
       await secretsSvc.syncEnvBindingsForTarget?.(
@@ -2199,8 +2225,6 @@ export function agentRoutes(
         agentEnv,
       );
     }
-
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -2407,7 +2431,11 @@ export function agentRoutes(
     await assertCanManageInstructionsPath(req, existing);
 
     const actor = getActorInfo(req);
-    const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
+    const { bundle, adapterConfig } = await instructions.updateBundle(
+      existing,
+      req.body,
+      harnessCtxFromActor(actor, "PATCH /api/agents/:id/instructions-bundle"),
+    );
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       adapterConfig,
@@ -2473,9 +2501,13 @@ export function agentRoutes(
     await assertCanManageInstructionsPath(req, existing);
 
     const actor = getActorInfo(req);
-    const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
-      clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
-    });
+    const result = await instructions.writeFile(
+      existing,
+      req.body.path,
+      req.body.content,
+      { clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate },
+      harnessCtxFromActor(actor, "PUT /api/agents/:id/instructions-bundle/file"),
+    );
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       result.adapterConfig,
@@ -2528,7 +2560,11 @@ export function agentRoutes(
     }
 
     const actor = getActorInfo(req);
-    const result = await instructions.deleteFile(existing, relativePath);
+    const result = await instructions.deleteFile(
+      existing,
+      relativePath,
+      harnessCtxFromActor(actor, "DELETE /api/agents/:id/instructions-bundle/file"),
+    );
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,

@@ -16,7 +16,7 @@ import { notFound } from "../errors.js";
 import { agentService } from "./agents.js";
 import { approvalService } from "./approvals.js";
 import { logActivity } from "./activity-log.js";
-import { agentInstructionsService } from "./agent-instructions.js";
+import { agentInstructionsService, type HarnessHistoryWriteCtx } from "./agent-instructions.js";
 
 const MANAGED_AGENT_ENTITY_TYPE = "managed_agent";
 const DEFAULT_MANAGED_AGENT_ADAPTER_TYPE = "process";
@@ -332,6 +332,10 @@ export function pluginManagedAgentService(
     const declared = declaredInstructionFiles(declaration, variables);
     if (!declared) return agent;
 
+    const harnessCtx: HarnessHistoryWriteCtx = {
+      actor: { type: "plugin-install", id: options.pluginId, display: options.pluginKey },
+      agentSlug: declaration.agentKey,
+    };
     const materialized = await instructions.materializeManagedBundle(
       agent,
       declared.files,
@@ -340,6 +344,7 @@ export function pluginManagedAgentService(
         replaceExisting: materializeOptions.replaceExisting,
         clearLegacyPromptTemplate: true,
       },
+      harnessCtx,
     );
     const updated = await agentSvc.update(agent.id, {
       adapterConfig: materialized.adapterConfig,
