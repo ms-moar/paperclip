@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { Issue } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,7 +89,7 @@ describe("IssueRow", () => {
     const root = createRoot(container);
     const issue = createIssue();
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={issue} selected />);
     });
 
@@ -98,7 +98,7 @@ describe("IssueRow", () => {
     expect(link?.className).toContain("hover:bg-transparent");
     expect(link?.className).not.toContain("hover:bg-accent/50");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -106,7 +106,7 @@ describe("IssueRow", () => {
   it("neutralizes selected status and unread dot accents", () => {
     const root = createRoot(container);
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={createIssue()} selected unreadState="visible" />);
     });
 
@@ -124,7 +124,7 @@ describe("IssueRow", () => {
     expect(statusIcon?.className).toContain("!border-muted-foreground");
     expect(statusIcon?.className).toContain("!text-muted-foreground");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -137,7 +137,7 @@ describe("IssueRow", () => {
       issueDetailSource: "inbox",
     };
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={issue} issueLinkState={state} />);
     });
 
@@ -145,7 +145,7 @@ describe("IssueRow", () => {
     expect(link).not.toBeNull();
     expect(link?.getAttribute("to") ?? link?.getAttribute("href")).toBe("/issues/PAP-1");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -153,7 +153,7 @@ describe("IssueRow", () => {
   it("opts issue quicklook out for dense inbox rows", () => {
     const root = createRoot(container);
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={createIssue()} />);
     });
 
@@ -161,7 +161,7 @@ describe("IssueRow", () => {
     expect(link).not.toBeNull();
     expect(link?.getAttribute("data-disable-issue-quicklook")).toBe("true");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -169,14 +169,14 @@ describe("IssueRow", () => {
   it("passes the visible row issue into the navigation prefetch path", () => {
     const root = createRoot(container);
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={createIssue()} />);
     });
 
     const link = container.querySelector("[data-inbox-issue-link]") as HTMLAnchorElement | null;
     expect(link?.getAttribute("data-issue-prefetch-id")).toBe("issue-1");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -185,7 +185,7 @@ describe("IssueRow", () => {
     const root = createRoot(container);
     const issue = createIssue({ title: "Parent task" });
 
-    act(() => {
+    flushSync(() => {
       root.render(
         <IssueRow
           issue={issue}
@@ -199,7 +199,7 @@ describe("IssueRow", () => {
     expect(titleEl?.textContent).toContain("(3 sub-tasks)");
     expect(container.querySelector('[data-testid="suffix"]')).not.toBeNull();
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -207,7 +207,7 @@ describe("IssueRow", () => {
   it("renders checklist step numbers beside the issue identifier", () => {
     const root = createRoot(container);
 
-    act(() => {
+    flushSync(() => {
       root.render(
         <IssueRow
           issue={createIssue({ identifier: "PAP-42" })}
@@ -224,7 +224,7 @@ describe("IssueRow", () => {
     expect(metaRow).not.toBeUndefined();
     expect(metaRow?.textContent?.replace(/\s+/g, "")).toContain("2.1.PAP-42");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -232,7 +232,7 @@ describe("IssueRow", () => {
   it("does not render a planning mode marker for planning work mode issues", () => {
     const root = createRoot(container);
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={createIssue({ workMode: "planning" })} />);
     });
 
@@ -240,7 +240,7 @@ describe("IssueRow", () => {
     expect(link).not.toBeNull();
     expect(link?.textContent).not.toContain("Planning");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -248,14 +248,14 @@ describe("IssueRow", () => {
   it("renders without error when titleSuffix is omitted", () => {
     const root = createRoot(container);
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={createIssue()} />);
     });
 
     const titleEl = container.querySelector(".line-clamp-2, .truncate");
     expect(titleEl?.textContent).toContain("Inbox item");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -276,7 +276,7 @@ describe("IssueRow", () => {
       ],
     });
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={issue} />);
     });
 
@@ -284,7 +284,7 @@ describe("IssueRow", () => {
     expect(badges.length).toBeGreaterThan(0);
     expect(badges[0]?.textContent).toContain("Blocked by parked work");
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
@@ -305,13 +305,13 @@ describe("IssueRow", () => {
       ],
     });
 
-    act(() => {
+    flushSync(() => {
       root.render(<IssueRow issue={issue} />);
     });
 
     expect(container.querySelector('[data-testid="issue-row-parked-blocker"]')).toBeNull();
 
-    act(() => {
+    flushSync(() => {
       root.unmount();
     });
   });
