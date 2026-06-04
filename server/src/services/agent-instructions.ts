@@ -2,6 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { notFound, unprocessable } from "../errors.js";
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { harnessHistoryService, type HarnessHistoryActor } from "./harness-history.js";
+
+export interface HarnessHistoryWriteCtx {
+  actor: HarnessHistoryActor;
+  runId?: string | null;
+  issueId?: string | null;
+  issueIdentifier?: string | null;
+  agentSlug?: string | null;
+  trigger?: string;
+}
 
 const ENTRY_FILE_DEFAULT = "AGENTS.md";
 const COMPANY_LANGUAGE_POLICY_FILE = "LANGUAGE_POLICY.md";
@@ -543,6 +553,7 @@ export function agentInstructionsService() {
   async function ensureWritableBundle(
     agent: AgentLike,
     options?: { clearLegacyPromptTemplate?: boolean },
+    _ctx?: HarnessHistoryWriteCtx,
   ): Promise<{ adapterConfig: Record<string, unknown>; state: BundleState }> {
     const derived = deriveBundleState(agent);
     const current = await recoverManagedBundleState(agent, derived);
@@ -588,6 +599,7 @@ export function agentInstructionsService() {
       entryFile?: string;
       clearLegacyPromptTemplate?: boolean;
     },
+    ctx?: HarnessHistoryWriteCtx,
   ): Promise<{ bundle: AgentInstructionsBundle; adapterConfig: Record<string, unknown> }> {
     const state = await recoverManagedBundleState(agent, deriveBundleState(agent));
     const nextMode = input.mode ?? state.mode ?? "managed";
@@ -627,6 +639,13 @@ export function agentInstructionsService() {
       entryFile: nextEntryFile,
       clearLegacyPromptTemplate: input.clearLegacyPromptTemplate,
     });
+    if (ctx) {
+      await harnessHistoryService.commitOnWrite({
+        reason: "agent.instructions_bundle_updated",
+        paths: [nextRootPath],
+        ...ctx,
+      });
+    }
     const nextBundle = await getBundle({ ...agent, adapterConfig: nextConfig });
     return { bundle: nextBundle, adapterConfig: nextConfig };
   }
@@ -636,6 +655,7 @@ export function agentInstructionsService() {
     relativePath: string,
     content: string,
     options?: { clearLegacyPromptTemplate?: boolean },
+    ctx?: HarnessHistoryWriteCtx,
   ): Promise<{
     bundle: AgentInstructionsBundle;
     file: AgentInstructionsFileDetail;
@@ -659,6 +679,13 @@ export function agentInstructionsService() {
     const absolutePath = resolvePathWithinRoot(prepared.state.rootPath!, relativePath);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, content, "utf8");
+    if (ctx) {
+      await harnessHistoryService.commitOnWrite({
+        reason: "agent.instructions_file_updated",
+        paths: [absolutePath],
+        ...ctx,
+      });
+    }
     const nextAgent = { ...agent, adapterConfig: prepared.adapterConfig };
     const [bundle, file] = await Promise.all([
       getBundle(nextAgent),
@@ -667,7 +694,11 @@ export function agentInstructionsService() {
     return { bundle, file, adapterConfig: prepared.adapterConfig };
   }
 
-  async function deleteFile(agent: AgentLike, relativePath: string): Promise<{
+  async function deleteFile(
+    agent: AgentLike,
+    relativePath: string,
+    ctx?: HarnessHistoryWriteCtx,
+  ): Promise<{
     bundle: AgentInstructionsBundle;
     adapterConfig: Record<string, unknown>;
   }> {
@@ -683,6 +714,13 @@ export function agentInstructionsService() {
     }
     const absolutePath = resolvePathWithinRoot(state.rootPath, normalizedPath);
     await fs.rm(absolutePath, { force: true });
+    if (ctx) {
+      await harnessHistoryService.commitOnWrite({
+        reason: "agent.instructions_file_deleted",
+        paths: [absolutePath],
+        ...ctx,
+      });
+    }
     const adapterConfig = buildPersistedBundleConfig(derived, state);
     const bundle = await getBundle({ ...agent, adapterConfig });
     return { bundle, adapterConfig };
@@ -738,6 +776,7 @@ export function agentInstructionsService() {
       replaceExisting?: boolean;
       entryFile?: string;
     },
+    ctx?: HarnessHistoryWriteCtx,
   ): Promise<{ bundle: AgentInstructionsBundle; adapterConfig: Record<string, unknown> }> {
     const rootPath = resolveManagedInstructionsRoot(agent);
     const entryFile = options?.entryFile ? normalizeRelativeFilePath(options.entryFile) : ENTRY_FILE_DEFAULT;
@@ -752,13 +791,24 @@ export function agentInstructionsService() {
       normalizeRelativeFilePath(relativePath),
       content,
     ] as const);
+    const writtenPaths: string[] = [];
     for (const [relativePath, content] of normalizedEntries) {
       const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, content, "utf8");
+      writtenPaths.push(absolutePath);
     }
     if (!normalizedEntries.some(([relativePath]) => relativePath === entryFile)) {
-      await fs.writeFile(resolvePathWithinRoot(rootPath, entryFile), "", "utf8");
+      const entryAbsPath = resolvePathWithinRoot(rootPath, entryFile);
+      await fs.writeFile(entryAbsPath, "", "utf8");
+      writtenPaths.push(entryAbsPath);
+    }
+    if (ctx) {
+      await harnessHistoryService.commitOnWrite({
+        reason: "agent.instructions_bundle_materialise",
+        paths: writtenPaths.length > 0 ? writtenPaths : [rootPath],
+        ...ctx,
+      });
     }
 
     const adapterConfig = applyBundleConfig(asRecord(agent.adapterConfig), {
