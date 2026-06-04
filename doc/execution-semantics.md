@@ -429,12 +429,19 @@ the review-decision `PATCH /api/issues/{issueId}` shape (`status=done` to
 approve, or `status=in_progress` plus `comment` to request changes) without a
 checkout lock.
 
-Open question for board/CTO approval in Phase 6: should the reviewer also be
-allowed to submit an atomic decision when `executionState.status` is no longer
-`pending`, such as after `changes_requested` reassigned implementation ownership?
-Default recommendation: allow it only when the decision pointer has not changed;
-reject it when `executionState.lastDecisionId` advanced, because that proves a
-newer decision owns the review state.
+CTO decision (locked in [MAD-234](/MAD/issues/MAD-234) Phase 6, board-approved
+plan revision 1, accepted by user `HKwdRO3cWGOCRrSetSaDE5u9EvfnnXkX`
+2026-06-03 14:14 UTC): when `executionState.status` is no longer `pending`
+(e.g. after `changes_requested` reassigned implementation ownership), the
+reviewer may submit an atomic decision **only when**
+`executionState.lastDecisionId` has not advanced since the reviewer wake was
+emitted. If the request carries `expectedLastDecisionId` that matches the
+current pointer, Paperclip applies the decision atomically. If the pointer has
+advanced, Paperclip rejects with typed `errorCode: "review_context_stale"`
+(HTTP 409) without overwriting newer state. Rationale: optimistic concurrency
+on `lastDecisionId` preserves productivity (no extra round-trip when nothing
+moved) while preventing the silent-overwrite class of bug surfaced in
+[MAD-203](/MAD/issues/MAD-203).
 
 ```json
 {
