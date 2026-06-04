@@ -319,6 +319,11 @@ function mergeAdapterRecoveryMetadata(input: {
   };
 }
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved"]);
+const EXECUTION_STAGE_WAKE_REASONS = new Set([
+  "execution_review_requested",
+  "execution_approval_requested",
+  "execution_changes_requested",
+]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -1965,6 +1970,34 @@ function normalizeInteractionContinuationWakeContext(
   clearInteractionContinuationWakeContext(contextSnapshot);
 }
 
+function isExecutionStageWakeReason(reason: string | null | undefined) {
+  return Boolean(reason && EXECUTION_STAGE_WAKE_REASONS.has(reason));
+}
+
+function executionWakeExpectedAgentId(state: ReturnType<typeof parseIssueExecutionState>) {
+  if (!state) return null;
+  if (state.status === "pending") {
+    return state.currentParticipant?.type === "agent" ? (state.currentParticipant.agentId ?? null) : null;
+  }
+  if (state.status === "changes_requested") {
+    return state.returnAssignee?.type === "agent" ? (state.returnAssignee.agentId ?? null) : null;
+  }
+  return null;
+}
+
+function readExecutionWakeSourceLastDecisionId(contextSnapshot: Record<string, unknown>) {
+  const executionStage = parseObject(contextSnapshot.executionStage);
+  return readNonEmptyString(executionStage.lastDecisionId) ?? null;
+}
+
+function buildExecutionWakeDedupKey(input: {
+  issueId: string;
+  recipientAgentId: string;
+  lastDecisionId: string | null;
+}) {
+  return `execution-stage-wake:${input.issueId}:${input.recipientAgentId}:${input.lastDecisionId ?? "none"}`;
+}
+
 export function mergeCoalescedContextSnapshot(
   existingRaw: unknown,
   incoming: Record<string, unknown>,
@@ -2506,6 +2539,151 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .from(agents)
       .where(eq(agents.id, agentId))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function revalidateExecutionStageWake(input: {
+    agent: typeof agents.$inferSelect;
+    issueId: string | null;
+    recipientAgentId: string;
+    reason: string | null;
+    source: NonNullable<WakeupOptions["source"]>;
+    triggerDetail: WakeupOptions["triggerDetail"] | null;
+    payload: Record<string, unknown> | null;
+    contextSnapshot: Record<string, unknown>;
+    requestedByActorType: WakeupOptions["requestedByActorType"];
+    requestedByActorId: string | null | undefined;
+    idempotencyKey: string | null | undefined;
+  }): Promise<{ allowed: true; dedupKey: string | null } | { allowed: false }> {
+    if (!isExecutionStageWakeReason(input.reason) || !input.issueId) return { allowed: true, dedupKey: null };
+
+    const issue = await db
+      .select({
+        id: issues.id,
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+        executionState: issues.executionState,
+      })
+      .from(issues)
+      .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.agent.companyId)))
+      .then((rows) => rows[0] ?? null);
+
+    const state = parseIssueExecutionState(issue?.executionState);
+    const expectedAgentId = issue ? executionWakeExpectedAgentId(state) : null;
+    const sourceLastDecisionId = readExecutionWakeSourceLastDecisionId(input.contextSnapshot);
+    const currentLastDecisionId = state?.lastDecisionId ?? null;
+    const lastDecisionId = sourceLastDecisionId ?? currentLastDecisionId;
+    const dedupKey = buildExecutionWakeDedupKey({
+      issueId: input.issueId,
+      recipientAgentId: input.recipientAgentId,
+      lastDecisionId,
+    });
+    const stale =
+      !issue ||
+      !expectedAgentId ||
+      expectedAgentId !== input.recipientAgentId ||
+      (sourceLastDecisionId !== null && sourceLastDecisionId !== currentLastDecisionId) ||
+      (state?.status === "pending" && issue.status !== "in_review") ||
+      (state?.status === "changes_requested" && issue.status !== "in_progress");
+
+    if (!stale) {
+      await logActivity(db, {
+        companyId: input.agent.companyId,
+        actorType: "system",
+        actorId: "heartbeat",
+        agentId: input.recipientAgentId,
+        runId: null,
+        action: "wake.dispatched",
+        entityType: "issue",
+        entityId: input.issueId,
+        details: {
+          issueId: input.issueId,
+          recipientAgentId: input.recipientAgentId,
+          expectedAgentId,
+          lastDecisionId,
+          sourceLastDecisionId,
+          currentLastDecisionId,
+          wakeReason: input.reason,
+          wakeDedupKey: dedupKey,
+        },
+      });
+      return { allowed: true, dedupKey };
+    }
+
+    const now = new Date();
+    const existing = await db
+      .select({ id: agentWakeupRequests.id, coalescedCount: agentWakeupRequests.coalescedCount })
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.companyId, input.agent.companyId),
+          eq(agentWakeupRequests.agentId, input.recipientAgentId),
+          eq(agentWakeupRequests.idempotencyKey, dedupKey),
+          eq(agentWakeupRequests.status, "skipped"),
+          eq(agentWakeupRequests.reason, "wake.stale_suppressed"),
+        ),
+      )
+      .orderBy(asc(agentWakeupRequests.requestedAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    const details = {
+      issueId: input.issueId,
+      recipientAgentId: input.recipientAgentId,
+      expectedAgentId,
+      lastDecisionId,
+      sourceLastDecisionId,
+      currentLastDecisionId,
+      wakeReason: input.reason,
+      wakeDedupKey: dedupKey,
+      issueStatus: issue?.status ?? null,
+      executionStateStatus: state?.status ?? null,
+    };
+
+    if (existing) {
+      await db
+        .update(agentWakeupRequests)
+        .set({ coalescedCount: (existing.coalescedCount ?? 0) + 1, updatedAt: now })
+        .where(eq(agentWakeupRequests.id, existing.id));
+      await logActivity(db, {
+        companyId: input.agent.companyId,
+        actorType: "system",
+        actorId: "heartbeat",
+        agentId: input.recipientAgentId,
+        runId: null,
+        action: "wake.folded",
+        entityType: "issue",
+        entityId: input.issueId,
+        details,
+      });
+      return { allowed: false };
+    }
+
+    await db.insert(agentWakeupRequests).values({
+      companyId: input.agent.companyId,
+      agentId: input.recipientAgentId,
+      source: input.source,
+      triggerDetail: input.triggerDetail,
+      reason: "wake.stale_suppressed",
+      payload: input.payload,
+      status: "skipped",
+      requestedByActorType: input.requestedByActorType ?? null,
+      requestedByActorId: input.requestedByActorId ?? null,
+      idempotencyKey: dedupKey,
+      finishedAt: now,
+    });
+    await logActivity(db, {
+      companyId: input.agent.companyId,
+      actorType: "system",
+      actorId: "heartbeat",
+      agentId: input.recipientAgentId,
+      runId: null,
+      action: "wake.stale_suppressed",
+      entityType: "issue",
+      entityId: input.issueId,
+      details,
+    });
+
+    return { allowed: false };
   }
 
   async function getRun(runId: string, opts?: { unsafeFullResultJson?: boolean }) {
@@ -8813,6 +8991,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // project workspace even when context.projectId wasn't set by the caller.
     if (projectId && !readNonEmptyString(enrichedContextSnapshot.projectId)) {
       enrichedContextSnapshot.projectId = projectId;
+    }
+
+    const executionWakeGate = await revalidateExecutionStageWake({
+      agent,
+      issueId,
+      recipientAgentId: agentId,
+      reason,
+      source,
+      triggerDetail,
+      payload,
+      contextSnapshot: enrichedContextSnapshot,
+      requestedByActorType: opts.requestedByActorType,
+      requestedByActorId: opts.requestedByActorId,
+      idempotencyKey: opts.idempotencyKey,
+    });
+    if (!executionWakeGate.allowed) return null;
+    if (executionWakeGate.dedupKey) {
+      opts.idempotencyKey = executionWakeGate.dedupKey;
     }
 
     const budgetBlock = await budgets.getInvocationBlock(agent.companyId, agentId, {
