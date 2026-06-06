@@ -205,7 +205,7 @@ describe("server adapter registry", () => {
     await expect(listAdapterModelProfiles("codex_local")).resolves.toEqual([
       expect.objectContaining({
         key: "cheap",
-        adapterConfig: expect.objectContaining({ model: "gpt-5.4" }),
+        adapterConfig: expect.objectContaining({ model: "gpt-5.4-mini" }),
         source: "adapter_default",
       }),
     ]);
@@ -230,7 +230,13 @@ describe("server adapter registry", () => {
         source: "adapter_default",
       }),
     ]);
-    await expect(listAdapterModelProfiles("pi_local")).resolves.toEqual([]);
+    await expect(listAdapterModelProfiles("pi_local")).resolves.toEqual([
+      expect.objectContaining({
+        key: "cheap",
+        adapterConfig: expect.objectContaining({ model: "openai-codex/gpt-5.3-codex-spark" }),
+        source: "adapter_default",
+      }),
+    ]);
   });
 
   it("wraps built-in npm runtime installs with the sandbox-aware install helper", () => {
