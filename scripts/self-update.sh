@@ -85,10 +85,14 @@ unset NODE_ENV
 log "Backing up database..."
 pnpm db:backup 2>&1 | tee -a "$LOG_FILE" || log "WARN: DB backup failed, continuing anyway"
 
-# Rebase custom commits onto updated upstream
+# Rebase custom commits onto updated upstream.
+# Preserve local merge commits: the custom branch contains conflict-resolution
+# merges that intentionally drop/rename files (for example migration-number
+# collisions). Flattening those merges can resurrect obsolete files and make the
+# post-rebase build fail.
 # -X ours: on conflict prefer our version (e.g. custom .gitignore)
 log "Rebasing $CUSTOM_COMMITS custom commits onto origin/$UPSTREAM_BRANCH..."
-if git rebase -X ours "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+if git rebase --rebase-merges -X ours "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
   log "Rebase succeeded"
 else
   log "ERROR: Rebase failed — conflicts detected"
