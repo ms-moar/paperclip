@@ -70,7 +70,7 @@ fi
 CUSTOM_COMMITS=$(git rev-list "$MERGE_BASE..HEAD" --count)
 UPSTREAM_NEW=$(git rev-list "$MERGE_BASE..$UPSTREAM_HEAD" --count)
 
-log "UPDATE: $UPSTREAM_NEW new upstream commits, $CUSTOM_COMMITS custom commits to rebase"
+log "UPDATE: $UPSTREAM_NEW new upstream commits, $CUSTOM_COMMITS local commits to preserve"
 log "Upstream commits:"
 git log --oneline "$MERGE_BASE..$UPSTREAM_HEAD" 2>&1 | tee -a "$LOG_FILE"
 
@@ -85,19 +85,20 @@ unset NODE_ENV
 log "Backing up database..."
 pnpm db:backup 2>&1 | tee -a "$LOG_FILE" || log "WARN: DB backup failed, continuing anyway"
 
-# Rebase custom commits onto updated upstream.
-# Preserve local merge commits: the custom branch contains conflict-resolution
-# merges that intentionally drop/rename files (for example migration-number
-# collisions). Flattening those merges can resurrect obsolete files and make the
-# post-rebase build fail.
+# Merge upstream into the custom branch instead of flattening local history.
+# The custom branch contains conflict-resolution merge commits that intentionally
+# drop/rename files (for example migration-number collisions). A plain rebase
+# loses those resolutions and can resurrect obsolete files; --rebase-merges cannot
+# replay our historical octopus consolidation merge. A forward merge preserves the
+# exact custom topology while still importing origin/master.
 # -X ours: on conflict prefer our version (e.g. custom .gitignore)
-log "Rebasing $CUSTOM_COMMITS custom commits onto origin/$UPSTREAM_BRANCH..."
-if git rebase --rebase-merges -X ours "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
-  log "Rebase succeeded"
+log "Merging origin/$UPSTREAM_BRANCH into $CUSTOM_BRANCH..."
+if git merge --no-edit -X ours "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+  log "Merge succeeded"
 else
-  log "ERROR: Rebase failed — conflicts detected"
-  git rebase --abort 2>&1 | tee -a "$LOG_FILE"
-  log "Rebase aborted. Staying on pre-update version ($PRE_REBASE_HEAD)"
+  log "ERROR: Merge failed — conflicts detected"
+  git merge --abort 2>&1 | tee -a "$LOG_FILE" || true
+  log "Merge aborted. Staying on pre-update version ($PRE_REBASE_HEAD)"
   log "Conflicting files need manual resolution"
   exit 1
 fi
