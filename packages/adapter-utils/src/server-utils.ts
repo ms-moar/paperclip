@@ -364,6 +364,16 @@ type PaperclipWakeChildIssueSummary = {
   summary: string | null;
 };
 
+type PaperclipWakeOpenDescendantSummary = {
+  id: string | null;
+  identifier: string | null;
+  title: string | null;
+  status: string | null;
+  priority: string | null;
+  parentIssueId: string | null;
+  depth: number | null;
+};
+
 type PaperclipWakeChildAuditEntry = {
   id: string | null;
   identifier: string | null;
@@ -420,6 +430,10 @@ type PaperclipWakePayload = {
   interactionStatus: string | null;
   childIssueSummaries: PaperclipWakeChildIssueSummary[];
   childIssueSummaryTruncated: boolean;
+  openDescendantSummaries: PaperclipWakeOpenDescendantSummary[];
+  openDescendantCount: number;
+  openDescendantSummaryTruncated: boolean;
+  subtreeAuditTruncated: boolean;
   childAuditDigest: PaperclipWakeChildAuditDigest | null;
   commentIds: string[];
   latestCommentId: string | null;
@@ -508,6 +522,20 @@ function normalizePaperclipWakeChildIssueSummary(value: unknown): PaperclipWakeC
   const summary = asString(child.summary, "").trim() || null;
   if (!id && !identifier && !title && !status && !summary) return null;
   return { id, identifier, title, status, priority, summary };
+}
+
+function normalizePaperclipWakeOpenDescendantSummary(value: unknown): PaperclipWakeOpenDescendantSummary | null {
+  const descendant = parseObject(value);
+  const id = asString(descendant.id, "").trim() || null;
+  const identifier = asString(descendant.identifier, "").trim() || null;
+  const title = asString(descendant.title, "").trim() || null;
+  const status = asString(descendant.status, "").trim() || null;
+  const priority = asString(descendant.priority, "").trim() || null;
+  const parentIssueId = asString(descendant.parentIssueId, "").trim() || null;
+  const depthRaw = asNumber(descendant.depth, 0);
+  const depth = depthRaw > 0 ? depthRaw : null;
+  if (!id && !identifier && !title && !status) return null;
+  return { id, identifier, title, status, priority, parentIssueId, depth };
 }
 
 function normalizePaperclipWakeChildAuditEntry(value: unknown): PaperclipWakeChildAuditEntry | null {
@@ -649,6 +677,15 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
         .map((entry) => normalizePaperclipWakeChildIssueSummary(entry))
         .filter((entry): entry is PaperclipWakeChildIssueSummary => Boolean(entry))
     : [];
+  const openDescendantSummaries = Array.isArray(payload.openDescendantSummaries)
+    ? payload.openDescendantSummaries
+        .map((entry) => normalizePaperclipWakeOpenDescendantSummary(entry))
+        .filter((entry): entry is PaperclipWakeOpenDescendantSummary => Boolean(entry))
+    : [];
+  const openDescendantCountRaw = asNumber(payload.openDescendantCount, 0);
+  const openDescendantCount = openDescendantCountRaw > 0
+    ? openDescendantCountRaw
+    : openDescendantSummaries.length;
   const unresolvedBlockerIssueIds = Array.isArray(payload.unresolvedBlockerIssueIds)
     ? payload.unresolvedBlockerIssueIds
         .map((entry) => asString(entry, "").trim())
@@ -666,6 +703,7 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
     comments.length === 0 &&
     commentIds.length === 0 &&
     childIssueSummaries.length === 0 &&
+    openDescendantSummaries.length === 0 &&
     unresolvedBlockerIssueIds.length === 0 &&
     unresolvedBlockerSummaries.length === 0 &&
     !activeTreeHold &&
@@ -694,6 +732,10 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
     interactionStatus: asString(payload.interactionStatus, "").trim() || null,
     childIssueSummaries,
     childIssueSummaryTruncated: asBoolean(payload.childIssueSummaryTruncated, false),
+    openDescendantSummaries,
+    openDescendantCount,
+    openDescendantSummaryTruncated: asBoolean(payload.openDescendantSummaryTruncated, false),
+    subtreeAuditTruncated: asBoolean(payload.subtreeAuditTruncated, false),
     childAuditDigest,
     commentIds,
     latestCommentId: asString(payload.latestCommentId, "").trim() || null,
@@ -907,6 +949,40 @@ export function renderPaperclipWakePrompt(
     }
     if (normalized.childIssueSummaryTruncated) {
       lines.push("[child issue summaries truncated]");
+    }
+    lines.push(
+      "Note: this list covers DIRECT children only. Inspect the subtree audit below before claiming the tree is complete.",
+    );
+  }
+
+  const openDescendants = normalized.openDescendantSummaries;
+  if (openDescendants.length > 0 || normalized.openDescendantCount > 0) {
+    lines.push(
+      "",
+      `Subtree audit — ${normalized.openDescendantCount} open descendant issue(s) below the direct children:`,
+    );
+    for (const descendant of openDescendants) {
+      const label = descendant.identifier ?? descendant.id ?? "unknown";
+      const depthSuffix = descendant.depth ? ` depth=${descendant.depth}` : "";
+      const parentSuffix = descendant.parentIssueId ? ` parent=${descendant.parentIssueId}` : "";
+      lines.push(
+        `- ${label}${descendant.title ? ` ${descendant.title}` : ""}${descendant.status ? ` (${descendant.status})` : ""}${depthSuffix}${parentSuffix}`,
+      );
+    }
+    if (normalized.openDescendantSummaryTruncated) {
+      lines.push("[open descendant summaries truncated]");
+    }
+    if (normalized.subtreeAuditTruncated) {
+      lines.push("[subtree audit truncated — there may be more open descendants not listed]");
+    }
+    lines.push(
+      "WARNING: the tree is NOT complete. Do NOT mark the parent issue done or claim \"all phases complete\".",
+      "Resolve or re-open the listed grandchildren first, then re-evaluate parent closure.",
+    );
+  } else if (normalized.childIssueSummaries.length > 0) {
+    lines.push("", "Subtree audit: no open descendants detected below the direct children.");
+    if (normalized.subtreeAuditTruncated) {
+      lines.push("[subtree audit truncated — re-check via API before closing parent if subtree is large]");
     }
   }
 
