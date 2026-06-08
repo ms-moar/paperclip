@@ -90,10 +90,11 @@ pnpm db:backup 2>&1 | tee -a "$LOG_FILE" || log "WARN: DB backup failed, continu
 # drop/rename files (for example migration-number collisions). A plain rebase
 # loses those resolutions and can resurrect obsolete files; --rebase-merges cannot
 # replay our historical octopus consolidation merge. A forward merge preserves the
-# exact custom topology while still importing origin/master.
-# -X ours: on conflict prefer our version (e.g. custom .gitignore)
+# exact custom topology while still importing origin/master. Do not auto-pick a
+# conflict side: package lockfiles and migration journals must be resolved
+# deliberately, otherwise the update can build from an inconsistent tree.
 log "Merging origin/$UPSTREAM_BRANCH into $CUSTOM_BRANCH..."
-if git merge --no-edit -X ours "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+if git merge --no-edit "origin/$UPSTREAM_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
   log "Merge succeeded"
 else
   log "ERROR: Merge failed — conflicts detected"
