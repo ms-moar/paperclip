@@ -27,7 +27,7 @@ index 93cddf8243271f5fb3ab101617f9114257e41328..f32c3ea453a6a8f815f31b357f392225
  /** Regex to extract token usage from Hermes output. */
  const TOKEN_USAGE_REGEX = /tokens?[:\s]+(\d+)\s*(?:input|in)\b.*?(\d+)\s*(?:output|out)\b/i;
  /** Regex to extract cost from Hermes output. */
-@@ -379,11 +393,72 @@ export async function execute(ctx) {
+@@ -379,10 +393,68 @@ export async function execute(ctx) {
          usage: parsed.usage || null,
          cost_usd: parsed.costUsd ?? null,
      };

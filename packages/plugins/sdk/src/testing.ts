@@ -1516,6 +1516,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           executionLockedAt: null,
           createdByAgentId: null,
           createdByUserId: null,
+          requestedByUserId: null,
           issueNumber: null,
           identifier: null,
           originKind,
