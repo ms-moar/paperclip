@@ -9,7 +9,7 @@
 -- BUT only because the unique index covers active rows. NOT EXISTS scans both
 -- active and tombstoned rows for the same (company, principal, key) and skips
 -- when EITHER exists — silently re-applying default access is never desirable
--- for a permission revoke. See 0093_grant_revocation_tombstones.sql for the
+-- for a permission revoke. See 9003_grant_revocation_tombstones.sql for the
 -- soft-delete contract this depends on.
 INSERT INTO "principal_permission_grants"
   ("id", "company_id", "principal_type", "principal_id", "permission_key", "scope", "granted_by_user_id", "created_at", "updated_at")

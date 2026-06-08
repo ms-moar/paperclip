@@ -1,9 +1,9 @@
 -- Backfill `agents:view_all` for every active human company membership so
 -- existing deployments see no behavior change after this permission key is
--- introduced. Mirrors 0091_grant_tasks_view_all_default exactly.
+-- introduced. Mirrors 9001_grant_tasks_view_all_default exactly.
 --
 -- WHERE NOT EXISTS skips both active and tombstoned rows so an admin
--- revocation survives migration re-runs (see 0093_grant_revocation_tombstones).
+-- revocation survives migration re-runs (see 9003_grant_revocation_tombstones).
 INSERT INTO "principal_permission_grants"
   ("id", "company_id", "principal_type", "principal_id", "permission_key", "scope", "granted_by_user_id", "created_at", "updated_at")
 SELECT

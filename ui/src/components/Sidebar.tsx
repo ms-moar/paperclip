@@ -14,6 +14,7 @@ import {
   GitBranch,
   Package,
   Settings,
+  FolderOpen,
   MessageCircle,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";

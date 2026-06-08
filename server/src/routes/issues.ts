@@ -2620,7 +2620,7 @@ export function issueRoutes(
 
     const visibility = await resolveIssueVisibility(db, companyId, req.actor);
 
-    const result = await svc.list(companyId, {
+    const rawResult = await svc.list(companyId, {
       attention: attention === "blocked" ? "blocked" : undefined,
       status: req.query.status as string | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
@@ -2701,15 +2701,12 @@ export function issueRoutes(
       return;
     }
 
-    const countVisibility = await resolveIssueVisibility(db, companyId, req.actor);
-
-    const count = await svc.count(companyId, {
+    const blockedCountFilters = {
       attention: "blocked",
       status: req.query.status as string | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
       participantAgentId: req.query.participantAgentId as string | undefined,
       assigneeUserId: req.query.assigneeUserId as string | undefined,
-      visibility: countVisibility,
       projectId: req.query.projectId as string | undefined,
       workspaceId: req.query.workspaceId as string | undefined,
       executionWorkspaceId: req.query.executionWorkspaceId as string | undefined,
@@ -4986,7 +4983,7 @@ export function issueRoutes(
       issue.id,
       await resolveIssueVisibility(db, issue.companyId, req.actor),
     );
-    assertCanManageIssueMonitor(req, issue.assigneeAgentId, true);
+    await assertCanManageIssueMonitor(access, req, issue.companyId, issue.assigneeAgentId, true);
 
     const actor = getActorInfo(req);
     await heartbeat.triggerIssueMonitor(issue.id, {

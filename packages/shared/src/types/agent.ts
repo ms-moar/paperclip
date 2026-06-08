@@ -18,6 +18,9 @@ import type { AgentOrgChainHealth } from "../agent-eligibility.js";
 export interface AgentPermissions extends Record<string, unknown> {
   canCreateAgents: boolean;
   canReadQuotaWindows?: boolean;
+  canAssignTasks?: boolean;
+  trustPreset?: TrustPreset;
+  authorizationPolicy?: TrustAuthorizationPolicy;
 }
 
 export interface AgentModelProfileConfig {

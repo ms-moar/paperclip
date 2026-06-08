@@ -3,7 +3,7 @@
 -- audit-preserving soft-delete.
 --
 -- Motivation:
---   Migration 0091_grant_tasks_view_all_default (and any future default-grant
+--   Migration 9001_grant_tasks_view_all_default (and any future default-grant
 --   backfill) re-applies the same INSERT ... ON CONFLICT DO NOTHING SQL each
 --   time it lands under a new tag (rebase, multi-tenant cloud bootstrap,
 --   backup restore). If an admin had previously DELETE'd a row to revoke

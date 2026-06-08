@@ -1949,7 +1949,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           ) ?? null;
           if (!agent) {
             const now = new Date();
-            agent = {
+            const createdAgent: Agent = {
               id: randomUUID(),
               companyId: cid,
               name: declaration.displayName,
@@ -1973,7 +1973,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
               createdAt: now,
               updatedAt: now,
             };
-            agents.set(agent.id, agent);
+            agents.set(createdAgent.id, createdAgent);
+            agent = createdAgent;
           }
           const resolved = managedResolution(agentKey, cid, agent, "resolved");
           if (!resolved.agent) return resolved;

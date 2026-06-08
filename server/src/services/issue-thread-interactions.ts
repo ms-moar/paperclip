@@ -48,7 +48,7 @@ import {
   parseIssueExecutionState,
   principalsEqual,
 } from "./issue-execution-policy.js";
-import { issueService } from "./issues.js";
+import { issueService, listUnfinalizedExecutionWorkspaceIds } from "./issues.js";
 
 type InteractionActor = {
   agentId?: string | null;

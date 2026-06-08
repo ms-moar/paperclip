@@ -461,7 +461,10 @@ export function agentService(db: Db) {
         const visCond = agentVisibilityCondition(options.visibility, companyId);
         if (visCond) conditions.push(visCond);
       }
-      const rows = await db.select().from(agents).where(and(...conditions));
+      const [rows, allCompanyRows] = await Promise.all([
+        db.select().from(agents).where(and(...conditions)),
+        listCompanyAgentRows(companyId),
+      ]);
       const hydrated = await hydrateAgentSpend(rows);
       return normalizeAgentRows(hydrated, allCompanyRows);
     },

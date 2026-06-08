@@ -5,7 +5,7 @@ import { normalizeIssueIdentifier } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { activityService, normalizeActivityLimit } from "../services/activity.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
-import { heartbeatService, issueService } from "../services/index.js";
+import { accessService, heartbeatService, issueService } from "../services/index.js";
 import {
   resolveIssueVisibility,
   assertIssueVisible,

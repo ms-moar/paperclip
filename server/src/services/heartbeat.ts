@@ -2346,6 +2346,59 @@ function normalizeInteractionContinuationWakeContext(
   clearInteractionContinuationWakeContext(contextSnapshot);
 }
 
+type AcceptedPlanWakeRoutingDecision = {
+  otherActiveClaimIssueId: string;
+  otherActiveClaimIdentifier: string | null;
+  otherActiveClaimTitle: string;
+  forceFreshSession: boolean;
+  suppressAcceptedContinuation: boolean;
+};
+
+async function resolveAcceptedPlanWakeRoutingDecision(args: {
+  db: Db;
+  companyId: string;
+  agentId: string;
+  issueId: string | null;
+  acceptedPlanContinuationWake: boolean;
+  contextSnapshot: Record<string, unknown>;
+}): Promise<AcceptedPlanWakeRoutingDecision | null> {
+  if (args.issueId === null) return null;
+  if (!args.acceptedPlanContinuationWake) return null;
+
+  const activeClaims = await args.db
+    .select({
+      sourceIssueId: issuePlanDecompositions.sourceIssueId,
+      identifier: issues.identifier,
+      title: issues.title,
+    })
+    .from(issuePlanDecompositions)
+    .innerJoin(issues, eq(issues.id, issuePlanDecompositions.sourceIssueId))
+    .where(and(
+      eq(issuePlanDecompositions.companyId, args.companyId),
+      eq(issuePlanDecompositions.ownerAgentId, args.agentId),
+      eq(issuePlanDecompositions.status, "in_flight"),
+    ))
+    .orderBy(desc(issuePlanDecompositions.updatedAt), asc(issuePlanDecompositions.createdAt));
+
+  if (activeClaims.length === 0) return null;
+  if (activeClaims.some((claim) => claim.sourceIssueId === args.issueId)) return null;
+
+  const otherActiveClaim = activeClaims[0];
+  if (!otherActiveClaim) return null;
+
+  const hasAcceptedContinuationWake =
+    readNonEmptyString(args.contextSnapshot.interactionKind) === "request_confirmation" &&
+    readNonEmptyString(args.contextSnapshot.interactionStatus) === "accepted";
+
+  return {
+    otherActiveClaimIssueId: otherActiveClaim.sourceIssueId,
+    otherActiveClaimIdentifier: otherActiveClaim.identifier ?? null,
+    otherActiveClaimTitle: otherActiveClaim.title,
+    forceFreshSession: true,
+    suppressAcceptedContinuation: hasAcceptedContinuationWake,
+  };
+}
+
 function isExecutionStageWakeReason(reason: string | null | undefined) {
   return Boolean(reason && EXECUTION_STAGE_WAKE_REASONS.has(reason));
 }
@@ -3103,6 +3156,46 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .from(agents)
       .where(eq(agents.id, agentId))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function getAgentInvokability(agent: typeof agents.$inferSelect | null | undefined) {
+    return evaluateAgentInvokabilityFromDb(db, agent);
+  }
+
+  function toAgentOrgRow(agent: Pick<typeof agents.$inferSelect, "id" | "companyId" | "name" | "reportsTo" | "status">): AgentOrgRow {
+    return {
+      id: agent.id,
+      companyId: agent.companyId,
+      name: agent.name,
+      reportsTo: agent.reportsTo,
+      status: agent.status,
+    };
+  }
+
+  async function listCompanyAgentOrgRows(companyId: string): Promise<AgentOrgRow[]> {
+    return db
+      .select({
+        id: agents.id,
+        companyId: agents.companyId,
+        name: agents.name,
+        reportsTo: agents.reportsTo,
+        status: agents.status,
+      })
+      .from(agents)
+      .where(eq(agents.companyId, companyId));
+  }
+
+  function groupAgentOrgRowsByCompany(agentRows: AgentOrgRow[]) {
+    const byCompany = new Map<string, AgentOrgRow[]>();
+    for (const agent of agentRows) {
+      const companyAgents = byCompany.get(agent.companyId);
+      if (companyAgents) {
+        companyAgents.push(agent);
+      } else {
+        byCompany.set(agent.companyId, [agent]);
+      }
+    }
+    return byCompany;
   }
 
   async function revalidateExecutionStageWake(input: {
@@ -7962,7 +8055,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       agent,
       config: parseObject(agent.adapterConfig),
     });
-    const requestedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
+    const resolvedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
       projectPolicy: projectExecutionWorkspacePolicy,
       issueSettings: issueExecutionWorkspaceSettings,
       legacyUseProjectWorkspace: issueAssigneeOverrides?.useProjectWorkspace ?? null,
