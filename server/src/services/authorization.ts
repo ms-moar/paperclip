@@ -106,10 +106,10 @@ function companyIdForResource(resource: AuthorizationResource) {
 
 function permissionForAction(action: AuthorizationAction): PermissionKey | null {
   if (action === "agent_config:read" || action === "agent_config:update") return "agents:create";
+  if (action === "company_scope:read") return "tasks:view_all";
   if (
     action === "agent:read" ||
     action === "agent:wake" ||
-    action === "company_scope:read" ||
     action === "issue:read" ||
     action === "project:read" ||
     action === "runtime:manage" ||
@@ -127,8 +127,8 @@ function canCreateAgentsLegacy(agent: { role: string; permissions: unknown }) {
   return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
 }
 
-function isBoardProjectReadAction(action: AuthorizationAction) {
-  return action === "project:read";
+function isBoardMembershipReadAction(action: AuthorizationAction) {
+  return action === "issue:read" || action === "project:read";
 }
 
 function scopeValueList(value: unknown): string[] {
@@ -941,19 +941,19 @@ export function authorizationService(db: Db) {
           explanation: "Board user id is required.",
         });
       }
-      if (isBoardProjectReadAction(input.action)) {
+      if (isBoardMembershipReadAction(input.action)) {
         const membership = await getActiveMembership(companyId, "user", input.actor.userId);
         if (membership) {
           return allow({
             action: input.action,
             reason: "allow_simple_company_member",
-            explanation: "Allowed by active company membership for board project reads.",
+            explanation: "Allowed by active company membership for route-scoped board reads.",
           });
         }
         return deny({
           action: input.action,
           reason: "deny_missing_membership",
-          explanation: "Active company membership is required for board project reads.",
+          explanation: "Active company membership is required for route-scoped board reads.",
         });
       }
       if (input.action === "tasks:assign") {

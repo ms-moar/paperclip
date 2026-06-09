@@ -200,6 +200,88 @@ describeEmbeddedPostgres("authorization service", () => {
     });
   });
 
+  it("allows active board members to read issues after route-level visibility scoping", async () => {
+    const company = await createCompany(db, "BoardIssueRead");
+    const issue = await createIssue(db, company.id);
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "operator",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "board", userId, source: "session" },
+      action: "issue:read",
+      resource: { type: "issue", companyId: company.id, issueId: issue.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_simple_company_member",
+    });
+  });
+
+  it("allows board company-scope reads through the tasks:view_all grant", async () => {
+    const company = await createCompany(db, "BoardCompanyScopeRead");
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "operator",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      permissionKey: "tasks:view_all",
+      grantedByUserId: "owner",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "board", userId, source: "session" },
+      action: "company_scope:read",
+      resource: { type: "company", companyId: company.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      grant: {
+        principalType: "user",
+        principalId: userId,
+        permissionKey: "tasks:view_all",
+      },
+    });
+  });
+
+  it("denies board company-scope reads when tasks:view_all is missing", async () => {
+    const company = await createCompany(db, "BoardCompanyScopeDenied");
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "operator",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "board", userId, source: "session" },
+      action: "company_scope:read",
+      resource: { type: "company", companyId: company.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: "deny_missing_grant",
+    });
+    expect(decision.explanation).toContain("tasks:view_all");
+  });
 
   it("allows agent grants for agent configuration decisions", async () => {
     const company = await createCompany(db, "AgentGrant");
