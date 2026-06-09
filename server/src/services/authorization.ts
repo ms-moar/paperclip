@@ -127,6 +127,10 @@ function canCreateAgentsLegacy(agent: { role: string; permissions: unknown }) {
   return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
 }
 
+function isBoardCompanyReadAction(action: AuthorizationAction) {
+  return action === "company_scope:read" || action === "issue:read" || action === "project:read";
+}
+
 function scopeValueList(value: unknown): string[] {
   if (typeof value === "string" && value.trim()) return [value.trim()];
   if (!Array.isArray(value)) return [];
@@ -935,6 +939,21 @@ export function authorizationService(db: Db) {
           action: input.action,
           reason: "deny_unauthenticated",
           explanation: "Board user id is required.",
+        });
+      }
+      if (isBoardCompanyReadAction(input.action)) {
+        const membership = await getActiveMembership(companyId, "user", input.actor.userId);
+        if (membership) {
+          return allow({
+            action: input.action,
+            reason: "allow_simple_company_member",
+            explanation: "Allowed by active company membership for read-only board access.",
+          });
+        }
+        return deny({
+          action: input.action,
+          reason: "deny_missing_membership",
+          explanation: "Active company membership is required for read-only board access.",
         });
       }
       if (input.action === "tasks:assign") {

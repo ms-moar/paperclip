@@ -175,6 +175,77 @@ describeEmbeddedPostgres("authorization service", () => {
     expect(decision.explanation).toContain("Allowed by explicit grant tasks:assign");
   });
 
+  it("allows active board members to read company scope without explicit grants", async () => {
+    const company = await createCompany(db, "BoardCompanyRead");
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "operator",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "board", userId, source: "session" },
+      action: "company_scope:read",
+      resource: { type: "company", companyId: company.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_simple_company_member",
+    });
+  });
+
+  it("allows active board members to read projects without explicit grants", async () => {
+    const company = await createCompany(db, "BoardProjectRead");
+    const project = await createProject(db, company.id, "Visible");
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "operator",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "board", userId, source: "session" },
+      action: "project:read",
+      resource: { type: "project", companyId: company.id, projectId: project.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_simple_company_member",
+    });
+  });
+
+  it("allows active board members to read issues without explicit grants", async () => {
+    const company = await createCompany(db, "BoardIssueRead");
+    const issue = await createIssue(db, company.id);
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "operator",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "board", userId, source: "session" },
+      action: "issue:read",
+      resource: { type: "issue", companyId: company.id, issueId: issue.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_simple_company_member",
+    });
+  });
+
   it("allows agent grants for agent configuration decisions", async () => {
     const company = await createCompany(db, "AgentGrant");
     const actorAgent = await createAgent(db, company.id);
