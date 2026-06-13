@@ -226,3 +226,13 @@ export function isPiUnknownSessionError(stdout: string, stderr: string): boolean
 
   return /unknown\s+session|session\s+not\s+found|session\s+.*\s+not\s+found|no\s+session/i.test(haystack);
 }
+
+export function isPiUsageLimitError(stdout: string, stderr: string): boolean {
+  const haystack = `${stdout}\n${stderr}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  return /usage limit has been reached|usage limit for|usage_limit_reached|rate limit.*try again|you(?:'|')ve hit your usage limit/i.test(haystack);
+}

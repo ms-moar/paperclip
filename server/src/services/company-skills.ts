@@ -1052,7 +1052,7 @@ export async function discoverProjectWorkspaceSkillDirectories(target: ProjectSk
 
     const entries = await fs.readdir(absoluteRoot, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const absoluteSkillDir = path.resolve(absoluteRoot, entry.name);
       if (!(await statPath(path.join(absoluteSkillDir, "SKILL.md")))?.isFile()) continue;
       discovered.set(absoluteSkillDir, "full");

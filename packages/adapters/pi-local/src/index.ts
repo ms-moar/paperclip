@@ -5,6 +5,8 @@ export const label = "Pi (local)";
 
 export const SANDBOX_INSTALL_COMMAND = "npm install -g @earendil-works/pi-coding-agent@0.74.0";
 
+export const CHEAP_MODEL = "openai-codex/gpt-5.3-codex-spark";
+
 export const models: Array<{ id: string; label: string }> = [];
 
 export const modelProfiles: AdapterModelProfileDefinition[] = [
@@ -13,7 +15,7 @@ export const modelProfiles: AdapterModelProfileDefinition[] = [
     label: "Cheap",
     description: "Use the cheapest Pi-accessible OpenAI Codex Spark lane.",
     adapterConfig: {
-      model: "openai-codex/gpt-5.3-codex-spark",
+      model: CHEAP_MODEL,
     },
     source: "adapter_default",
   },

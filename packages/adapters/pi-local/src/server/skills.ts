@@ -31,14 +31,32 @@ function resolvePiSkillsHome(config: Record<string, unknown>) {
 }
 
 async function buildPiSkillSnapshot(config: Record<string, unknown>): Promise<AdapterSkillSnapshot> {
-  const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
-  const desiredSkills = resolvePaperclipDesiredSkillNames(config, availableEntries);
+  const bundledEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const skillsHome = resolvePiSkillsHome(config);
   const installed = await readInstalledSkillTargets(skillsHome);
+
+  // Promote user-installed skills (symlinks in skillsHome with SKILL.md) to availableEntries.
+  // This makes them show as "installed" instead of "external" in Paperclip UI.
+  const bundledNames = new Set(bundledEntries.map((e) => e.runtimeName));
+  const userEntries: typeof bundledEntries = [];
+  for (const [name, installedEntry] of installed.entries()) {
+    if (bundledNames.has(name)) continue;
+    const source = installedEntry.targetPath;
+    if (!source) continue;
+    const hasSkillMd = await fs.access(path.join(source, "SKILL.md")).then(() => true).catch(() => false);
+    if (!hasSkillMd) continue;
+    userEntries.push({ key: name, runtimeName: name, source, required: false, requiredReason: null });
+  }
+
+  const availableEntries = [...bundledEntries, ...userEntries];
+  const desiredSkills = resolvePaperclipDesiredSkillNames(config, availableEntries);
+  // Auto-desire all user-installed skills so they show as "installed" not "stale".
+  const allDesired = [...desiredSkills, ...userEntries.map((e) => e.key)];
+
   return buildPersistentSkillSnapshot({
     adapterType: "pi_local",
     availableEntries,
-    desiredSkills,
+    desiredSkills: allDesired,
     installed,
     skillsHome,
     locationLabel: "~/.pi/agent/skills",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePiJsonl, isPiUnknownSessionError } from "./parse.js";
+import { parsePiJsonl, isPiUnknownSessionError, isPiUsageLimitError } from "./parse.js";
 
 describe("parsePiJsonl", () => {
   it("parses agent lifecycle and messages", () => {
@@ -269,5 +269,14 @@ describe("isPiUnknownSessionError", () => {
     expect(isPiUnknownSessionError("", "no session available")).toBe(true);
     expect(isPiUnknownSessionError("all good", "")).toBe(false);
     expect(isPiUnknownSessionError("working fine", "no errors")).toBe(false);
+  });
+});
+
+describe("isPiUsageLimitError", () => {
+  it("detects Pi usage limit failures from stdout or stderr", () => {
+    expect(isPiUsageLimitError('{"type":"error","error":{"type":"usage_limit_reached"}}', "")).toBe(true);
+    expect(isPiUsageLimitError("", "The usage limit has been reached for this plan")).toBe(true);
+    expect(isPiUsageLimitError("", "rate limit exceeded, try again later")).toBe(true);
+    expect(isPiUsageLimitError("all good", "no errors")).toBe(false);
   });
 });

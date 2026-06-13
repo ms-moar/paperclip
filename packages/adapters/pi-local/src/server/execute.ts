@@ -46,9 +46,9 @@ import {
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import { shellQuote } from "@paperclipai/adapter-utils/ssh";
-import { isPiUnknownSessionError, parsePiJsonl } from "./parse.js";
+import { isPiUnknownSessionError, isPiUsageLimitError, parsePiJsonl } from "./parse.js";
 import { ensurePiModelConfiguredAndAvailable } from "./models.js";
-import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+import { CHEAP_MODEL, SANDBOX_INSTALL_COMMAND } from "../index.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -615,8 +615,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ];
   })();
 
-  const buildArgs = (sessionFile: string): string[] => {
+  const buildArgs = (sessionFile: string, modelOverride?: { provider: string | null; modelId: string | null }): string[] => {
     const args: string[] = [];
+    const effectiveProvider = modelOverride !== undefined ? modelOverride.provider : provider;
+    const effectiveModelId = modelOverride !== undefined ? modelOverride.modelId : modelId;
 
     // Use JSON mode for structured output with print mode (non-interactive)
     args.push("--mode", "json");
@@ -625,8 +627,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // Use --append-system-prompt to extend Pi's default system prompt
     args.push("--append-system-prompt", renderedSystemPromptExtension);
 
-    if (provider) args.push("--provider", provider);
-    if (modelId) args.push("--model", modelId);
+    if (effectiveProvider) args.push("--provider", effectiveProvider);
+    if (effectiveModelId) args.push("--model", effectiveModelId);
     if (thinking) args.push("--thinking", thinking);
 
     args.push("--tools", "read,bash,edit,write,grep,find,ls");
@@ -641,8 +643,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     return args;
   };
 
-  const runAttempt = async (sessionFile: string) => {
-    const args = buildArgs(sessionFile);
+  const runAttempt = async (sessionFile: string, modelOverride?: { provider: string | null; modelId: string | null }) => {
+    const args = buildArgs(sessionFile, modelOverride);
     if (onMeta) {
       await onMeta({
         adapterType: "pi_local",
@@ -804,6 +806,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
       const retry = await runAttempt(newSessionPath);
       return toResult(retry, true);
+    }
+
+    // Cheap model fallback: if pi hit a usage limit and we're not already on the cheap model, retry
+    if (initialFailed && !initial.proc.timedOut && isPiUsageLimitError(initial.proc.stdout, initial.rawStderr)) {
+      const isAlreadyCheap = model.trim() === CHEAP_MODEL;
+      if (!isAlreadyCheap) {
+        await onLog(
+          "stdout",
+          `[paperclip] Pi hit usage limit on "${model}"; retrying with cheap model "${CHEAP_MODEL}".\n`,
+        );
+        const cheapProvider = parseModelProvider(CHEAP_MODEL);
+        const cheapModelId = parseModelId(CHEAP_MODEL);
+        const cheapRetry = await runAttempt(sessionPath, { provider: cheapProvider, modelId: cheapModelId });
+        const baseResult = toResult(cheapRetry);
+        return {
+          ...baseResult,
+          provider: cheapProvider ?? undefined,
+          model: CHEAP_MODEL,
+          biller: resolvePiBiller(runtimeEnv, cheapProvider),
+        };
+      }
     }
 
     return toResult(initial);
