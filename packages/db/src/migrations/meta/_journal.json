@@ -698,26 +698,47 @@
     {
       "idx": 99,
       "version": "7",
+      "when": 1781130000000,
+      "tag": "0099_skills_store_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1781480000000,
+      "tag": "0100_skill_install_count_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1781490000000,
+      "tag": "0101_plugin_company_id_tenant_isolation",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
       "when": 1779396752459,
       "tag": "9001_grant_tasks_view_all_default",
       "breakpoints": true
     },
     {
-      "idx": 100,
+      "idx": 103,
       "version": "7",
       "when": 1779840000000,
       "tag": "9002_add_issue_requested_by_user",
       "breakpoints": true
     },
     {
-      "idx": 101,
+      "idx": 104,
       "version": "7",
       "when": 1779882000000,
       "tag": "9003_grant_revocation_tombstones",
       "breakpoints": true
     },
     {
-      "idx": 102,
+      "idx": 105,
       "version": "7",
       "when": 1779895000000,
       "tag": "9004_grant_agents_view_all_default",
