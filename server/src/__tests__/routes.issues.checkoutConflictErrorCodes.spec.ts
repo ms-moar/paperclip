@@ -61,6 +61,7 @@ function registerRouteMocks() {
     agentService: () => mockAgentService,
     companyService: () => mockCompanyService,
     documentService: () => mockDocumentService,
+    documentAnnotationService: () => ({ remapOpenThreadsForDocument: async () => [] }),
     executionWorkspaceService: () => ({}),
     feedbackService: () => ({ listIssueVotesForUser: vi.fn(async () => []), saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })) }),
     goalService: () => ({}),
@@ -185,5 +186,43 @@ describe("issues route checkout conflict error codes", () => {
       currentCheckoutRunId: foreignRunId,
     });
     expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  it("preserves active subtree pause hold conflicts during checkout", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ status: "blocked" }));
+    mockIssueService.checkout.mockRejectedValue(
+      new HttpError(409, "Issue checkout blocked by active subtree pause hold", {
+        issueId,
+        holdId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        rootIssueId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        mode: "subtree",
+      }),
+    );
+
+    const res = await request(await createApp(ownerActor()))
+      .post(`/api/issues/${issueId}/checkout`)
+      .send({ agentId: ownerAgentId, expectedStatuses: ["blocked", "in_review"] });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "Issue checkout blocked by active subtree pause hold",
+      errorCode: "active_subtree_pause_hold",
+      currentAssigneeAgentId: ownerAgentId,
+      currentCheckoutRunId: null,
+      details: {
+        issueId,
+        status: "blocked",
+        assigneeAgentId: ownerAgentId,
+        checkoutRunId: null,
+        actorAgentId: ownerAgentId,
+        actorRunId: ownerRunId,
+        conflictDetails: {
+          issueId,
+          holdId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          rootIssueId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          mode: "subtree",
+        },
+      },
+    });
   });
 });

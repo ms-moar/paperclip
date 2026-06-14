@@ -180,7 +180,13 @@ type ActivityExecutionParticipant = Pick<
   NormalizedExecutionPolicy["stages"][number]["participants"][number],
   "type" | "agentId" | "userId"
 >;
-type IssueWriteConflictErrorCode = "checkout_held_by_other_run" | "assignee_mismatch" | "wake_context_stale";
+const ACTIVE_SUBTREE_PAUSE_HOLD_CHECKOUT_CONFLICT = "Issue checkout blocked by active subtree pause hold";
+
+type IssueWriteConflictErrorCode =
+  | "checkout_held_by_other_run"
+  | "assignee_mismatch"
+  | "wake_context_stale"
+  | "active_subtree_pause_hold";
 type ExecutionStageWakeContext = {
   wakeRole: "reviewer" | "approver" | "executor";
   stageId: string | null;
@@ -2024,6 +2030,29 @@ export function issueRoutes(
     return err instanceof HttpError || (!!err && typeof err === "object" && (err as { status?: unknown }).status === 409);
   }
 
+  function issueWriteConflictCodeFromError(err: unknown): IssueWriteConflictErrorCode | undefined {
+    const message = err instanceof Error
+      ? err.message
+      : !!err && typeof err === "object" && typeof (err as { message?: unknown }).message === "string"
+        ? (err as { message: string }).message
+        : null;
+    if (message === ACTIVE_SUBTREE_PAUSE_HOLD_CHECKOUT_CONFLICT) {
+      return "active_subtree_pause_hold";
+    }
+    return undefined;
+  }
+
+  function issueWriteConflictDetailsFromError(err: unknown): unknown {
+    if (!err || typeof err !== "object" || !("details" in err)) return undefined;
+    return (err as { details?: unknown }).details;
+  }
+
+  function issueWriteConflictMessage(errorCode: IssueWriteConflictErrorCode): string {
+    if (errorCode === "wake_context_stale") return "Reviewer wake context is stale";
+    if (errorCode === "active_subtree_pause_hold") return ACTIVE_SUBTREE_PAUSE_HOLD_CHECKOUT_CONFLICT;
+    return "Issue is checked out by another agent";
+  }
+
   function sendIssueWriteConflict(
     res: Response,
     issue: {
@@ -2033,23 +2062,32 @@ export function issueRoutes(
       checkoutRunId?: string | null;
       executionState?: unknown;
     },
-    input: { actorAgentId: string | null; actorRunId: string | null; errorCode?: IssueWriteConflictErrorCode },
+    input: {
+      actorAgentId: string | null;
+      actorRunId: string | null;
+      errorCode?: IssueWriteConflictErrorCode;
+      conflictDetails?: unknown;
+    },
   ) {
     const errorCode = input.errorCode ?? resolveIssueWriteConflictErrorCode(issue, input.actorAgentId, input.actorRunId);
+    const details: Record<string, unknown> = {
+      issueId: issue.id,
+      status: issue.status,
+      assigneeAgentId: issue.assigneeAgentId,
+      checkoutRunId: issue.checkoutRunId ?? null,
+      actorAgentId: input.actorAgentId,
+      actorRunId: input.actorRunId,
+    };
+    if (input.conflictDetails !== undefined) {
+      details.conflictDetails = input.conflictDetails;
+    }
     res.status(409).json({
-      error: errorCode === "wake_context_stale" ? "Reviewer wake context is stale" : "Issue is checked out by another agent",
+      error: issueWriteConflictMessage(errorCode),
       errorCode,
       currentAssigneeAgentId: issue.assigneeAgentId,
       currentCheckoutRunId: issue.checkoutRunId ?? null,
       executionState: summarizeExecutionStateForConflict(issue),
-      details: {
-        issueId: issue.id,
-        status: issue.status,
-        assigneeAgentId: issue.assigneeAgentId,
-        checkoutRunId: issue.checkoutRunId ?? null,
-        actorAgentId: input.actorAgentId,
-        actorRunId: input.actorRunId,
-      },
+      details,
     });
   }
 
@@ -6337,6 +6375,8 @@ export function issueRoutes(
         sendIssueWriteConflict(res, current ?? issue, {
           actorAgentId: req.body.agentId,
           actorRunId: checkoutRunId,
+          errorCode: issueWriteConflictCodeFromError(err),
+          conflictDetails: issueWriteConflictDetailsFromError(err),
         });
         return;
       }
