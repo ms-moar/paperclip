@@ -200,6 +200,68 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     expect(res.body.map((issue: { id: string }) => issue.id)).toEqual([assignedIssueId]);
   });
 
+  it("returns only fully unassigned issues for unassigned=true", async () => {
+    const companyId = randomUUID();
+    const assigneeAgentId = randomUUID();
+    const agentAssignedIssueId = randomUUID();
+    const userAssignedIssueId = randomUUID();
+    const unassignedIssueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: uniqueIssuePrefix(),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(agents).values({
+      id: assigneeAgentId,
+      companyId,
+      name: "Assignee",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values([
+      {
+        id: agentAssignedIssueId,
+        companyId,
+        title: "Agent assigned issue",
+        status: "todo",
+        priority: "medium",
+        assigneeAgentId,
+      },
+      {
+        id: userAssignedIssueId,
+        companyId,
+        title: "User assigned issue",
+        status: "todo",
+        priority: "medium",
+        assigneeUserId: "cloud-user-1",
+      },
+      {
+        id: unassignedIssueId,
+        companyId,
+        title: "Unassigned issue",
+        status: "todo",
+        priority: "medium",
+        assigneeAgentId: null,
+        assigneeUserId: null,
+      },
+    ]);
+
+    const app = createApp(companyId);
+    const res = await request(app)
+      .get(`/api/companies/${companyId}/issues`)
+      .query({ status: "todo", unassigned: "true", limit: "20" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.map((issue: { id: string }) => issue.id)).toEqual([unassignedIssueId]);
+  });
+
   it("returns 422 for malformed assigneeAgentId filters", async () => {
     const companyId = randomUUID();
     await db.insert(companies).values({

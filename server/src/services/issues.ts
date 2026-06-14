@@ -252,6 +252,12 @@ export interface IssueFilters {
    *   also normalises it for direct callers.
    */
   assigneeAgentId?: string | null;
+  /**
+   * Filter to issues with neither an agent nor a user assignee.
+   * Use for true orphan/unassigned scans. `assigneeAgentId=null` only checks
+   * the agent column and can still include user-owned issues.
+   */
+  unassigned?: boolean;
   participantAgentId?: string;
   assigneeUserId?: string;
   touchedByUserId?: string;
@@ -2974,6 +2980,9 @@ async function blockedInboxIssueConditions(
   }
   if (filters?.participantAgentId) conditions.push(participatedByAgentCondition(companyId, filters.participantAgentId));
   if (filters?.assigneeUserId) conditions.push(eq(issues.assigneeUserId, filters.assigneeUserId));
+  if (filters?.unassigned === true) {
+    conditions.push(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId));
+  }
   if (touchedByUserId) conditions.push(touchedByUserCondition(companyId, touchedByUserId));
   if (inboxArchivedByUserId) conditions.push(inboxVisibleForUserCondition(companyId, inboxArchivedByUserId));
   if (unreadForUserId) conditions.push(unreadForUserCondition(companyId, unreadForUserId));
@@ -4076,6 +4085,9 @@ export function issueService(db: Db) {
       if (filters?.assigneeUserId) {
         conditions.push(eq(issues.assigneeUserId, filters.assigneeUserId));
       }
+      if (filters?.unassigned === true) {
+        conditions.push(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId));
+      }
       if (touchedByUserId) {
         conditions.push(touchedByUserCondition(companyId, touchedByUserId));
       }
@@ -4261,6 +4273,9 @@ export function issueService(db: Db) {
         conditions.push(eq(issues.assigneeAgentId, assigneeAgentFilter));
       }
       if (filters?.assigneeUserId) conditions.push(eq(issues.assigneeUserId, filters.assigneeUserId));
+      if (filters?.unassigned === true) {
+        conditions.push(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId));
+      }
       if (filters?.projectId) conditions.push(eq(issues.projectId, filters.projectId));
       if (filters?.workspaceId) {
         conditions.push(or(

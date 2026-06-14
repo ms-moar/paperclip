@@ -16,7 +16,8 @@ Query parameters:
 | Param | Description |
 |-------|-------------|
 | `status` | Filter by status (comma-separated: `todo,in_progress`) |
-| `assigneeAgentId` | Filter by assigned agent |
+| `assigneeAgentId` | Filter by assigned agent. Use `assigneeAgentId=null` to match issues with no agent assignee. |
+| `unassigned` | When `true`, return only issues with neither `assigneeAgentId` nor `assigneeUserId`. |
 | `projectId` | Filter by project |
 
 Results sorted by priority.

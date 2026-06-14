@@ -2712,6 +2712,7 @@ export function issueRoutes(
     const sortField = req.query.sortField as string | undefined;
     const sortDir = req.query.sortDir as string | undefined;
     const hasPlanDocument = parseOptionalBooleanQuery(req.query.hasPlanDocument);
+    const unassigned = parseOptionalBooleanQuery(req.query.unassigned);
     const assigneeAgentFilterRaw = req.query.assigneeAgentId;
     let assigneeAgentId: string | null | undefined;
 
@@ -2755,6 +2756,10 @@ export function issueRoutes(
       res.status(400).json({ error: "hasPlanDocument must be true or false when provided" });
       return;
     }
+    if (unassigned === null) {
+      res.status(400).json({ error: "unassigned must be true or false when provided" });
+      return;
+    }
     if (assigneeAgentFilterRaw !== undefined) {
       if (typeof assigneeAgentFilterRaw !== "string") {
         res.status(422).json({ error: "assigneeAgentId must be a UUID or 'null'" });
@@ -2780,6 +2785,7 @@ export function issueRoutes(
       attention: attention === "blocked" ? "blocked" : undefined,
       status: req.query.status as string | string[] | undefined,
       assigneeAgentId,
+      unassigned,
       participantAgentId: req.query.participantAgentId as string | undefined,
       assigneeUserId,
       touchedByUserId,
@@ -2844,6 +2850,7 @@ export function issueRoutes(
     assertCompanyAccess(req, companyId);
     const attention = req.query.attention as string | undefined;
     const hasPlanDocument = parseOptionalBooleanQuery(req.query.hasPlanDocument);
+    const unassigned = parseOptionalBooleanQuery(req.query.unassigned);
     if (attention !== "blocked") {
       res.status(400).json({ error: "issues/count currently requires attention=blocked" });
       return;
@@ -2856,11 +2863,16 @@ export function issueRoutes(
       res.status(400).json({ error: "hasPlanDocument must be true or false when provided" });
       return;
     }
+    if (unassigned === null) {
+      res.status(400).json({ error: "unassigned must be true or false when provided" });
+      return;
+    }
 
     const blockedCountFilters = {
       attention: "blocked",
       status: req.query.status as string | string[] | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
+      unassigned,
       participantAgentId: req.query.participantAgentId as string | undefined,
       assigneeUserId: req.query.assigneeUserId as string | undefined,
       projectId: req.query.projectId as string | undefined,
