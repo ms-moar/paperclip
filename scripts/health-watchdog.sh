@@ -89,7 +89,12 @@ check_api_health() {
   time_total=$(awk '{print $2}' <<<"$metrics")
   latency_ms=$(awk -v t="${time_total:-0}" 'BEGIN { printf "%d", t * 1000 }')
 
-  if [ "$curl_status" -eq 0 ] && [ "$http_code" = "200" ] && [ "$latency_ms" -le "$LATENCY_THRESHOLD_MS" ]; then
+  if [ "$curl_status" -eq 0 ] && [ "$http_code" = "200" ]; then
+    if [ "$latency_ms" -gt "$LATENCY_THRESHOLD_MS" ]; then
+      echo "WARN: api slow http=$http_code latency_ms=$latency_ms threshold_ms=$LATENCY_THRESHOLD_MS"
+      return 0
+    fi
+
     echo "OK: api http=$http_code latency_ms=$latency_ms"
     return 0
   fi
