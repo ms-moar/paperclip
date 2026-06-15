@@ -1146,14 +1146,11 @@ function issueListOrderBy(
 ) {
   const canonicalLastActivityAt = issueCanonicalLastActivityAtExpr(companyId);
   if (sortField === "updated") {
-    const activityOrder = sortDir === "asc"
-      ? asc(canonicalLastActivityAt)
-      : desc(canonicalLastActivityAt);
     const updatedOrder = sortDir === "asc" ? asc(issues.updatedAt) : desc(issues.updatedAt);
     const idOrder = sortDir === "asc" ? asc(issues.id) : desc(issues.id);
     return hasSearch
-      ? [asc(searchOrder), activityOrder, updatedOrder, idOrder]
-      : [activityOrder, updatedOrder, idOrder];
+      ? [asc(searchOrder), updatedOrder, idOrder]
+      : [updatedOrder, idOrder];
   }
 
   return [

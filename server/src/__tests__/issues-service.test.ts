@@ -957,6 +957,60 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     expect(result.map((issue) => issue.id)).toEqual([recentMediumIssueId]);
   });
 
+  it("sorts explicit updated pages by issue row updatedAt instead of activity subqueries", async () => {
+    const companyId = randomUUID();
+    const recentlyUpdatedIssueId = randomUUID();
+    const recentlyCommentedIssueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values([
+      {
+        id: recentlyUpdatedIssueId,
+        companyId,
+        title: "Recently updated issue",
+        status: "todo",
+        priority: "medium",
+        updatedAt: new Date("2026-05-17T21:12:29.993Z"),
+      },
+      {
+        id: recentlyCommentedIssueId,
+        companyId,
+        title: "Recently commented issue",
+        status: "todo",
+        priority: "critical",
+        updatedAt: new Date("2026-05-01T10:00:00.000Z"),
+      },
+    ]);
+
+    await db.insert(issueComments).values({
+      companyId,
+      issueId: recentlyCommentedIssueId,
+      body: "New comment without touching issue.updatedAt",
+      createdAt: new Date("2026-05-18T10:00:00.000Z"),
+      updatedAt: new Date("2026-05-18T10:00:00.000Z"),
+    });
+
+    const result = await svc.list(companyId, {
+      limit: 2,
+      sortField: "updated",
+      sortDir: "desc",
+    });
+
+    expect(result.map((issue) => issue.id)).toEqual([
+      recentlyUpdatedIssueId,
+      recentlyCommentedIssueId,
+    ]);
+    expect(result.find((issue) => issue.id === recentlyCommentedIssueId)?.lastActivityAt?.toISOString()).toBe(
+      "2026-05-18T10:00:00.000Z",
+    );
+  });
+
   it("ranks comment matches ahead of description-only matches", async () => {
     const companyId = randomUUID();
     const commentMatchId = randomUUID();
