@@ -35,6 +35,7 @@ import {
   deriveIssueCommentRunLogAttribution,
   ISSUE_LIST_MAX_LIMIT,
   issueService,
+  resolveIssueListSortField,
 } from "../services/issues.ts";
 import { buildAgentMentionHref, buildProjectMentionHref, MAX_ISSUE_REQUEST_DEPTH } from "@paperclipai/shared";
 
@@ -56,6 +57,13 @@ describe("issue list limit helpers", () => {
     expect(clampIssueListLimit(0)).toBe(1);
     expect(clampIssueListLimit(25.9)).toBe(25);
     expect(clampIssueListLimit(ISSUE_LIST_MAX_LIMIT + 10)).toBe(ISSUE_LIST_MAX_LIMIT);
+  });
+
+  it("uses cheap updated sorting for bulk paginated issue-list reads", () => {
+    expect(resolveIssueListSortField({ limit: 499, offset: 0 })).toBeUndefined();
+    expect(resolveIssueListSortField({ limit: 500, offset: 0 })).toBe("updated");
+    expect(resolveIssueListSortField({ limit: 200, offset: 200 })).toBe("updated");
+    expect(resolveIssueListSortField({ sortField: "updated", limit: 25, offset: 0 })).toBe("updated");
   });
 });
 

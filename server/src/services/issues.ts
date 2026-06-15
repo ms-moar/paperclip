@@ -93,6 +93,7 @@ const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "bloc
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
 export const ISSUE_LIST_DEFAULT_LIMIT = 500;
 export const ISSUE_LIST_MAX_LIMIT = 1000;
+export const ISSUE_LIST_BULK_UPDATED_SORT_LIMIT = 500;
 const ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE = 500;
 export const MAX_CHILD_ISSUES_CREATED_BY_HELPER = 25;
 const MAX_CHILD_COMPLETION_SUMMARIES = 20;
@@ -459,6 +460,19 @@ function escapeLikePattern(value: string): string {
 
 export function clampIssueListLimit(limit: number): number {
   return Math.min(ISSUE_LIST_MAX_LIMIT, Math.max(1, Math.floor(limit)));
+}
+
+export function resolveIssueListSortField(filters?: Pick<IssueFilters, "sortField" | "limit" | "offset">): IssueFilters["sortField"] {
+  if (filters?.sortField === "updated") return "updated";
+  const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
+    ? Math.max(1, Math.floor(filters.limit))
+    : undefined;
+  const offset = typeof filters?.offset === "number" && Number.isFinite(filters.offset)
+    ? Math.max(0, Math.floor(filters.offset))
+    : 0;
+  return (limit !== undefined && limit >= ISSUE_LIST_BULK_UPDATED_SORT_LIMIT) || offset > 0
+    ? "updated"
+    : undefined;
 }
 
 function chunkList<T>(values: T[], size: number): T[][] {
@@ -4157,7 +4171,7 @@ export function issueService(db: Db) {
           hasSearch,
           priorityOrder,
           searchOrder,
-          sortField: filters?.sortField,
+          sortField: resolveIssueListSortField(filters),
           sortDir: filters?.sortDir,
         }));
       const pageQuery = offset > 0
