@@ -21,14 +21,14 @@ describe("buildIssuesSearchUrl", () => {
 });
 
 describe("issues page pagination helpers", () => {
-  it("advances to the next offset when the current page is full", () => {
-    expect(getNextIssuesPageOffset(500, 0)).toBe(500);
-    expect(getNextIssuesPageOffset(500, 500)).toBe(1000);
+  it("advances to the next offset when the default issue page is full", () => {
+    expect(getNextIssuesPageOffset(200, 0)).toBe(200);
+    expect(getNextIssuesPageOffset(200, 200)).toBe(400);
     expect(getNextIssuesPageOffset(1000, 2000, 1000)).toBe(3000);
   });
 
   it("stops requesting issue pages when the current page is partial", () => {
-    expect(getNextIssuesPageOffset(499, 0)).toBeUndefined();
+    expect(getNextIssuesPageOffset(199, 0)).toBeUndefined();
     expect(getNextIssuesPageOffset(999, 2000, 1000)).toBeUndefined();
   });
 

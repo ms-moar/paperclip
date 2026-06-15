@@ -464,8 +464,12 @@ export function IssueProperties({
   });
 
   const { data: allIssues, isFetching: isFetchingIssuePickerIssues } = useQuery({
-    queryKey: queryKeys.issues.list(companyId!),
-    queryFn: () => issuesApi.list(companyId!),
+    queryKey: [...queryKeys.issues.list(companyId!), "issue-picker", 100],
+    queryFn: () => issuesApi.list(companyId!, {
+      limit: 100,
+      sortField: "updated",
+      sortDir: "desc",
+    }),
     enabled: !!companyId && (parentOpen || (blockedByOpen && normalizedBlockedBySearch.length === 0)),
   });
 

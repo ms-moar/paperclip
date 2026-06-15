@@ -82,8 +82,12 @@ export function CommandPalette() {
   }, [open]);
 
   const { data: issues = [] } = useQuery({
-    queryKey: queryKeys.issues.list(selectedCompanyId!),
-    queryFn: () => issuesApi.list(selectedCompanyId!),
+    queryKey: [...queryKeys.issues.list(selectedCompanyId!), "command-palette", 50],
+    queryFn: () => issuesApi.list(selectedCompanyId!, {
+      limit: 50,
+      sortField: "updated",
+      sortDir: "desc",
+    }),
     enabled: !!selectedCompanyId && open && searchQuery.length === 0,
   });
 

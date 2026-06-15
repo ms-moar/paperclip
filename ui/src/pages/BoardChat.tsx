@@ -297,10 +297,13 @@ export function BoardChat() {
     return active?.title ?? null;
   }, [goals]);
 
-  // Find or detect the board operations issue
+  // Find or detect the board operations issue without loading the whole board.
   const { data: issues } = useQuery({
-    queryKey: queryKeys.issues.list(selectedCompanyId!),
-    queryFn: () => issuesApi.list(selectedCompanyId!),
+    queryKey: [...queryKeys.issues.list(selectedCompanyId!), "board-operations-lookup"],
+    queryFn: () => issuesApi.list(selectedCompanyId!, {
+      q: "Board Operations",
+      limit: 10,
+    }),
     enabled: !!selectedCompanyId,
   });
 

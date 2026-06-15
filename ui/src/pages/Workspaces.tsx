@@ -86,8 +86,14 @@ export function Workspaces() {
     enabled: Boolean(selectedCompanyId && isolatedWorkspacesEnabled),
   });
   const { data: issues = [], isLoading: issuesLoading, error: issuesError } = useQuery({
-    queryKey: selectedCompanyId ? queryKeys.issues.list(selectedCompanyId) : ["issues", "__workspaces__", "disabled"],
-    queryFn: () => issuesApi.list(selectedCompanyId!),
+    queryKey: selectedCompanyId
+      ? [...queryKeys.issues.list(selectedCompanyId), "workspaces", 200]
+      : ["issues", "__workspaces__", "disabled"],
+    queryFn: () => issuesApi.list(selectedCompanyId!, {
+      limit: 200,
+      sortField: "updated",
+      sortDir: "desc",
+    }),
     enabled: Boolean(selectedCompanyId && isolatedWorkspacesEnabled),
   });
   const {

@@ -15,8 +15,8 @@ import { IssuesList } from "../components/IssuesList";
 import { CircleDot } from "lucide-react";
 import type { Issue } from "@paperclipai/shared";
 
-const WORKSPACE_FILTER_ISSUE_LIMIT = 1000;
-const ISSUES_PAGE_SIZE = 500;
+const WORKSPACE_FILTER_ISSUE_LIMIT = 500;
+const ISSUES_PAGE_SIZE = 200;
 
 export function getNextIssuesPageOffset(
   loadedPageSize: number,

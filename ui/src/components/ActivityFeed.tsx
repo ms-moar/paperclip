@@ -352,10 +352,14 @@ export function ActivityFeed({ className }: ActivityFeedProps) {
     enabled: !!selectedCompanyId,
   });
 
-  // Fetch issues for name resolution
+  // Fetch recent issues for name resolution without loading the whole board.
   const { data: issues } = useQuery({
-    queryKey: queryKeys.issues.list(selectedCompanyId ?? ""),
-    queryFn: () => issuesApi.list(selectedCompanyId!),
+    queryKey: [...queryKeys.issues.list(selectedCompanyId ?? ""), "activity-feed", 100],
+    queryFn: () => issuesApi.list(selectedCompanyId!, {
+      limit: 100,
+      sortField: "updated",
+      sortDir: "desc",
+    }),
     enabled: !!selectedCompanyId,
   });
 

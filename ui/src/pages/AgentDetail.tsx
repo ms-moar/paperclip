@@ -116,7 +116,8 @@ const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string 
   cancelled: { icon: Slash, color: "text-neutral-500 dark:text-neutral-400" },
 };
 
-const RUN_LOG_PAGE_BYTES = 256_000;
+const RUN_LOG_PAGE_BYTES = 64_000;
+const RUN_LOG_FALLBACK_POLL_INTERVAL_MS = 5_000;
 
 const REDACTED_ENV_VALUE = "***REDACTED***";
 const SECRET_ENV_KEY_RE =
@@ -698,8 +699,13 @@ export function AgentDetail() {
   });
 
   const { data: allIssues } = useQuery({
-    queryKey: [...queryKeys.issues.list(resolvedCompanyId!), "participant-agent", resolvedAgentId ?? "__none__"],
-    queryFn: () => issuesApi.list(resolvedCompanyId!, { participantAgentId: resolvedAgentId! }),
+    queryKey: [...queryKeys.issues.list(resolvedCompanyId!), "participant-agent", resolvedAgentId ?? "__none__", 100],
+    queryFn: () => issuesApi.list(resolvedCompanyId!, {
+      participantAgentId: resolvedAgentId!,
+      limit: 100,
+      sortField: "updated",
+      sortDir: "desc",
+    }),
     enabled: !!resolvedCompanyId && !!resolvedAgentId && needsDashboardData,
   });
 
@@ -3808,7 +3814,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
       } catch {
         // ignore polling errors
       }
-    }, 2000);
+    }, RUN_LOG_FALLBACK_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [run.id, isLive, isStreamingConnected, events]);
 
@@ -3817,7 +3823,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     if (!isLive || isStreamingConnected) return;
     const interval = setInterval(async () => {
       try {
-        const result = await heartbeatsApi.log(run.id, logOffset, 256_000);
+        const result = await heartbeatsApi.log(run.id, logOffset, RUN_LOG_PAGE_BYTES);
         if (result.content) {
           appendLogContent(result.content, result.nextOffset === undefined);
         }
@@ -3830,7 +3836,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
         if (isRunLogUnavailable(err)) return;
         // ignore polling errors
       }
-    }, 2000);
+    }, RUN_LOG_FALLBACK_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [run.id, isLive, isStreamingConnected, logOffset]);
 

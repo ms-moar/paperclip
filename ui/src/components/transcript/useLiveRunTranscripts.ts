@@ -8,8 +8,8 @@ import { buildTranscript, getUIAdapter, onAdapterChange, type RunLogChunk, type 
 import { queryKeys } from "../../lib/queryKeys";
 import { buildSameOriginWebSocketUrl } from "../../lib/websocket-url";
 
-const LOG_POLL_INTERVAL_MS = 2000;
-const LOG_READ_LIMIT_BYTES = 256_000;
+const LOG_POLL_INTERVAL_MS = 5000;
+const LOG_READ_LIMIT_BYTES = 64_000;
 const EMPTY_RUN_LOG_CHUNKS: RunLogChunk[] = [];
 
 export interface RunTranscriptSource {
