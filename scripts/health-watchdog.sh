@@ -11,11 +11,37 @@ LATENCY_THRESHOLD_MS="${PAPERCLIP_HEALTH_LATENCY_THRESHOLD_MS:-3000}"
 ROOT_MIN_BYTES="${PAPERCLIP_ROOT_MIN_BYTES:-1000}"
 UI_INDEX_MIN_BYTES="${PAPERCLIP_UI_INDEX_MIN_BYTES:-1000}"
 RESTART_SLEEP_SECONDS="${PAPERCLIP_HEALTH_RESTART_SLEEP_SECONDS:-5}"
+FAILURE_THRESHOLD="${PAPERCLIP_HEALTH_FAILURE_THRESHOLD:-3}"
+STATE_FILE="${PAPERCLIP_HEALTH_STATE_FILE:-/home/ubuntu/.paperclip/instances/default/logs/health-watchdog.state}"
 
-mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$STATE_FILE")"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+if ! [[ "$FAILURE_THRESHOLD" =~ ^[0-9]+$ ]] || [ "$FAILURE_THRESHOLD" -lt 1 ]; then
+  log "ERROR: PAPERCLIP_HEALTH_FAILURE_THRESHOLD must be a positive integer (got '$FAILURE_THRESHOLD')"
+  exit 2
+fi
+
+read_failure_count() {
+  if [ ! -f "$STATE_FILE" ]; then
+    echo 0
+    return
+  fi
+
+  local count
+  count=$(grep -Eo '^[0-9]+' "$STATE_FILE" 2>/dev/null | head -n 1 || true)
+  echo "${count:-0}"
+}
+
+write_failure_count() {
+  printf '%s\n' "$1" > "$STATE_FILE"
+}
+
+reset_failure_count() {
+  rm -f "$STATE_FILE"
 }
 
 cleanup_lock() {
@@ -49,6 +75,9 @@ cleanup_files() {
 trap cleanup_files EXIT
 
 check_api_health() {
+  : > "$body_file"
+  : > "$metrics_file"
+
   set +e
   curl -sS --max-time "$MAX_TIME_SECONDS" -o "$body_file" -w '%{http_code} %{time_total}' "$HEALTH_URL" > "$metrics_file" 2>>"$LOG_FILE"
   local curl_status=$?
@@ -72,6 +101,9 @@ check_api_health() {
 }
 
 check_root_shell() {
+  : > "$root_body_file"
+  : > "$root_metrics_file"
+
   set +e
   curl -sS --max-time "$MAX_TIME_SECONDS" -o "$root_body_file" -w '%{http_code} %{time_total} %{size_download}' "$ROOT_URL" > "$root_metrics_file" 2>>"$LOG_FILE"
   local curl_status=$?
@@ -152,15 +184,26 @@ run_checks() {
 }
 
 if run_checks; then
+  reset_failure_count
   log "OK: Paperclip API and UI shell healthy"
   exit 0
 fi
 
-log "ACTION: restarting paperclip.service"
+failure_count=$(read_failure_count)
+failure_count=$((failure_count + 1))
+write_failure_count "$failure_count"
+
+if [ "$failure_count" -lt "$FAILURE_THRESHOLD" ]; then
+  log "WARN: Paperclip health check failed ($failure_count/$FAILURE_THRESHOLD); not restarting until threshold is reached"
+  exit 0
+fi
+
+log "ACTION: restarting paperclip.service after $failure_count consecutive failed health checks"
 systemctl restart paperclip.service
 sleep "$RESTART_SLEEP_SECONDS"
 
 if run_checks; then
+  reset_failure_count
   log "RECOVERED: Paperclip API and UI shell healthy after restart"
   exit 0
 fi
