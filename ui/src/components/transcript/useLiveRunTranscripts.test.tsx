@@ -286,6 +286,95 @@ describe("useLiveRunTranscripts", () => {
     container.remove();
   });
 
+  it("does not fallback-poll active run logs while the live event socket is open", async () => {
+    vi.useFakeTimers();
+    try {
+      function Harness() {
+        useLiveRunTranscripts({
+          companyId: "company-1",
+          runs: [{ id: "run-1", status: "running", adapterType: "codex_local" }],
+          logPollIntervalMs: 5000,
+        });
+        return null;
+      }
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(<Harness />);
+        await Promise.resolve();
+      });
+
+      expect(logMock).toHaveBeenCalledTimes(1);
+      act(() => {
+        FakeWebSocket.instances[0]!.triggerOpen();
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+
+      expect(logMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fallback-poll active run logs while the browser tab is hidden", async () => {
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    vi.useFakeTimers();
+    try {
+      function Harness() {
+        useLiveRunTranscripts({
+          companyId: "company-1",
+          runs: [{ id: "run-1", status: "running", adapterType: "codex_local" }],
+          enableRealtimeUpdates: false,
+          logPollIntervalMs: 5000,
+        });
+        return null;
+      }
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(<Harness />);
+        await Promise.resolve();
+      });
+
+      expect(logMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+
+      expect(logMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    } finally {
+      vi.useRealTimers();
+      if (visibilityDescriptor) {
+        Object.defineProperty(document, "visibilityState", visibilityDescriptor);
+      } else {
+        Reflect.deleteProperty(document, "visibilityState");
+      }
+    }
+  });
+
   it("rebuilds only the transcript for the run that receives live output", async () => {
     function Harness() {
       useLiveRunTranscripts({

@@ -38,6 +38,10 @@ function isTerminalStatus(status: string): boolean {
   return status === "failed" || status === "timed_out" || status === "cancelled" || status === "succeeded";
 }
 
+function isDocumentVisible(): boolean {
+  return typeof document === "undefined" || document.visibilityState !== "hidden";
+}
+
 function runKnownLogBytes(run: RunTranscriptSource): number | null {
   const bytes = run.status === "queued"
     ? run.logBytes
@@ -114,6 +118,7 @@ export function useLiveRunTranscripts({
   const pendingLogRowsByRunRef = useRef(new Map<string, string>());
   const logOffsetByRunRef = useRef(new Map<string, number>());
   const missingTerminalLogRunIdsRef = useRef(new Set<string>());
+  const realtimeConnectedRef = useRef(false);
   const transcriptCacheRef = useRef(new Map<string, {
     adapterType: string;
     chunks: RunLogChunk[];
@@ -255,6 +260,8 @@ export function useLiveRunTranscripts({
     const activeRuns = normalizedRuns.filter((run) => !isTerminalStatus(run.status));
     const interval = activeRuns.length > 0 && logPollIntervalMs > 0
       ? window.setInterval(() => {
+          if (!isDocumentVisible()) return;
+          if (enableRealtimeUpdates && realtimeConnectedRef.current) return;
           void Promise.all(activeRuns.map((run) => readRunLog(run)));
         }, logPollIntervalMs)
       : null;
@@ -263,7 +270,7 @@ export function useLiveRunTranscripts({
       cancelled = true;
       if (interval !== null) window.clearInterval(interval);
     };
-  }, [logPollIntervalMs, logReadLimitBytes, normalizedRuns, runIdsKey]);
+  }, [enableRealtimeUpdates, logPollIntervalMs, logReadLimitBytes, normalizedRuns, runIdsKey]);
 
   useEffect(() => {
     if (!enableRealtimeUpdates) return;
@@ -284,6 +291,10 @@ export function useLiveRunTranscripts({
         `/api/companies/${encodeURIComponent(companyId)}/events/ws`,
       );
       socket = new WebSocket(url);
+
+      socket.onopen = () => {
+        realtimeConnectedRef.current = true;
+      };
 
       socket.onmessage = (message) => {
         const raw = typeof message.data === "string" ? message.data : "";
@@ -350,6 +361,7 @@ export function useLiveRunTranscripts({
       };
 
       socket.onclose = () => {
+        realtimeConnectedRef.current = false;
         scheduleReconnect();
       };
     };
@@ -358,6 +370,7 @@ export function useLiveRunTranscripts({
 
     return () => {
       closed = true;
+      realtimeConnectedRef.current = false;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (socket) {
         socket.onmessage = null;

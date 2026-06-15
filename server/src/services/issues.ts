@@ -462,6 +462,22 @@ export function clampIssueListLimit(limit: number): number {
   return Math.min(ISSUE_LIST_MAX_LIMIT, Math.max(1, Math.floor(limit)));
 }
 
+export function resolveIssueListPageLimit(limit: number | undefined): number | undefined {
+  return typeof limit === "number" && Number.isFinite(limit)
+    ? clampIssueListLimit(limit)
+    : undefined;
+}
+
+export function issueLabelFilterCondition(companyId: string, labelId: string): SQL<boolean> {
+  return sql<boolean>`EXISTS (
+    SELECT 1
+    FROM ${issueLabels}
+    WHERE ${issueLabels.companyId} = ${companyId}
+      AND ${issueLabels.issueId} = ${issues.id}
+      AND ${issueLabels.labelId} = ${labelId}
+  )`;
+}
+
 export function resolveIssueListSortField(filters?: Pick<IssueFilters, "sortField" | "limit" | "offset">): IssueFilters["sortField"] {
   if (filters?.sortField === "updated") return "updated";
   const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
@@ -3014,12 +3030,7 @@ async function blockedInboxIssueConditions(
   }
   if (!shouldIncludePluginOperationIssues(filters)) conditions.push(nonPluginOperationIssueCondition());
   if (filters?.labelId) {
-    const labeledIssueIds = await dbOrTx
-      .select({ issueId: issueLabels.issueId })
-      .from(issueLabels)
-      .where(and(eq(issueLabels.companyId, companyId), eq(issueLabels.labelId, filters.labelId)));
-    if (labeledIssueIds.length === 0) return { conditions: [sql<boolean>`false`], contextUserId };
-    conditions.push(inArray(issues.id, labeledIssueIds.map((row: { issueId: string }) => row.issueId)));
+    conditions.push(issueLabelFilterCondition(companyId, filters.labelId));
   }
   if (filters?.excludeRoutineExecutions && !filters?.originKind && !filters?.originId) {
     conditions.push(ne(issues.originKind, "routine_execution"));
@@ -3136,9 +3147,7 @@ async function listBlockedInboxIssues(
   const offset = typeof filters?.offset === "number" && Number.isFinite(filters.offset)
     ? Math.max(0, Math.floor(filters.offset))
     : 0;
-  const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
-    ? Math.max(1, Math.floor(filters.limit))
-    : undefined;
+  const limit = resolveIssueListPageLimit(filters?.limit);
   return limit === undefined ? enriched.slice(offset) : enriched.slice(offset, offset + limit);
 }
 
@@ -4027,9 +4036,7 @@ export function issueService(db: Db) {
       }
       const assigneeAgentFilter = parseIssueAssigneeAgentFilter(filters?.assigneeAgentId);
       assertValidAssigneeAgentFilter(assigneeAgentFilter);
-      const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
-        ? Math.max(1, Math.floor(filters.limit))
-        : undefined;
+      const limit = resolveIssueListPageLimit(filters?.limit);
       const offset = typeof filters?.offset === "number" && Number.isFinite(filters.offset)
         ? Math.max(0, Math.floor(filters.offset))
         : 0;
@@ -4129,12 +4136,7 @@ export function issueService(db: Db) {
         conditions.push(nonPluginOperationIssueCondition());
       }
       if (filters?.labelId) {
-        const labeledIssueIds = await db
-          .select({ issueId: issueLabels.issueId })
-          .from(issueLabels)
-          .where(and(eq(issueLabels.companyId, companyId), eq(issueLabels.labelId, filters.labelId)));
-        if (labeledIssueIds.length === 0) return [];
-        conditions.push(inArray(issues.id, labeledIssueIds.map((row) => row.issueId)));
+        conditions.push(issueLabelFilterCondition(companyId, filters.labelId));
       }
       if (hasSearch) {
         conditions.push(

@@ -34,7 +34,9 @@ import {
   clampIssueListLimit,
   deriveIssueCommentRunLogAttribution,
   ISSUE_LIST_MAX_LIMIT,
+  issueLabelFilterCondition,
   issueService,
+  resolveIssueListPageLimit,
   resolveIssueListSortField,
 } from "../services/issues.ts";
 import { buildAgentMentionHref, buildProjectMentionHref, MAX_ISSUE_REQUEST_DEPTH } from "@paperclipai/shared";
@@ -64,6 +66,24 @@ describe("issue list limit helpers", () => {
     expect(resolveIssueListSortField({ limit: 500, offset: 0 })).toBe("updated");
     expect(resolveIssueListSortField({ limit: 200, offset: 200 })).toBe("updated");
     expect(resolveIssueListSortField({ sortField: "updated", limit: 25, offset: 0 })).toBe("updated");
+  });
+
+  it("normalizes internal issue-list page limits with the same server maximum", () => {
+    expect(resolveIssueListPageLimit(undefined)).toBeUndefined();
+    expect(resolveIssueListPageLimit(0)).toBe(1);
+    expect(resolveIssueListPageLimit(25.9)).toBe(25);
+    expect(resolveIssueListPageLimit(ISSUE_LIST_MAX_LIMIT + 10)).toBe(ISSUE_LIST_MAX_LIMIT);
+  });
+
+  it("builds label filters as an EXISTS predicate", () => {
+    const predicate = issueLabelFilterCondition("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222");
+    const rawSqlText = ((predicate as unknown as { queryChunks?: Array<{ value?: string | string[] }> }).queryChunks ?? [])
+      .flatMap((chunk) => Array.isArray(chunk.value) ? chunk.value : [chunk.value ?? ""])
+      .join("")
+      .toLowerCase();
+
+    expect(rawSqlText).toContain("exists");
+    expect(rawSqlText).toContain("select 1");
   });
 });
 
