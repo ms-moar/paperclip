@@ -35,6 +35,20 @@ describeEmbeddedPostgres("heartbeat list", () => {
     await tempDb?.cleanup();
   });
 
+  it("has an index for company-scoped recent run lists", async () => {
+    const rows = await db.execute<{ indexname: string; indexdef: string }>(
+      "select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'heartbeat_runs' and indexname in ('heartbeat_runs_company_created_idx', 'heartbeat_runs_company_agent_created_idx') order by indexname",
+    );
+
+    expect(rows).toHaveLength(2);
+    const indexDefs = new Map(rows.map((row) => [row.indexname, row.indexdef]));
+    expect(indexDefs.get("heartbeat_runs_company_created_idx")).toContain("company_id");
+    expect(indexDefs.get("heartbeat_runs_company_created_idx")).toContain("created_at");
+    expect(indexDefs.get("heartbeat_runs_company_agent_created_idx")).toContain("company_id");
+    expect(indexDefs.get("heartbeat_runs_company_agent_created_idx")).toContain("agent_id");
+    expect(indexDefs.get("heartbeat_runs_company_agent_created_idx")).toContain("created_at");
+  });
+
   it("returns runs even when the linked db schema lacks processGroupId", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
