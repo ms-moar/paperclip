@@ -49,6 +49,56 @@ describeEmbeddedPostgres("heartbeat list", () => {
     expect(indexDefs.get("heartbeat_runs_company_agent_created_idx")).toContain("created_at");
   });
 
+  it("keeps company-scoped lists lean while preserving agent-scoped result summaries", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "running",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "failed",
+      resultJson: {
+        summary: "expensive summary extraction should be skipped for company lists",
+        result: "details",
+        total_cost_usd: "0.1234",
+      },
+    });
+
+    const companyRuns = await heartbeatService(db).list(companyId, undefined, 5);
+    expect(companyRuns).toHaveLength(1);
+    expect(companyRuns[0]?.resultJson).toBeNull();
+
+    const agentRuns = await heartbeatService(db).list(companyId, agentId, 5);
+    expect(agentRuns).toHaveLength(1);
+    expect(agentRuns[0]?.resultJson).toMatchObject({
+      summary: "expensive summary extraction should be skipped for company lists",
+      result: "details",
+      total_cost_usd: 0.1234,
+    });
+  });
+
   it("returns runs even when the linked db schema lacks processGroupId", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

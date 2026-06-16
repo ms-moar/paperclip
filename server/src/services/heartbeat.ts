@@ -11465,6 +11465,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   return {
     list: async (companyId: string, agentId?: string, limit?: number) => {
       const safeForLegacyEncoding = await hasUnsafeTextProjectionDatabase();
+      const includeResultSummary = !safeForLegacyEncoding && Boolean(agentId);
       const query = db
         .select(
           safeForLegacyEncoding
@@ -11473,11 +11474,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 error: sql<string | null>`NULL`.as("error"),
                 ...heartbeatRunListContextColumns,
               }
-            : {
-                ...heartbeatRunListColumns,
-                ...heartbeatRunListContextColumns,
-                ...heartbeatRunListResultColumns,
-              },
+            : includeResultSummary
+              ? {
+                  ...heartbeatRunListColumns,
+                  ...heartbeatRunListContextColumns,
+                  ...heartbeatRunListResultColumns,
+                }
+              : {
+                  ...heartbeatRunListColumns,
+                  ...heartbeatRunListContextColumns,
+                },
         )
         .from(heartbeatRuns)
         .where(
@@ -11528,9 +11534,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             wakeSource: contextWakeSource,
             wakeTriggerDetail: contextWakeTriggerDetail,
           }),
-          resultJson: safeForLegacyEncoding
-            ? null
-            : summarizeHeartbeatRunListResultJson({
+          resultJson: includeResultSummary
+            ? summarizeHeartbeatRunListResultJson({
                 summary: resultSummary,
                 result: resultResult,
                 message: resultMessage,
@@ -11538,7 +11543,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 totalCostUsd: resultTotalCostUsd,
                 costUsd: resultCostUsd,
                 costUsdCamel: resultCostUsdCamel,
-              }),
+              })
+            : null,
         };
       });
     },
