@@ -275,6 +275,28 @@ describe("issue attachment routes", () => {
     expect(res.body.contentType).toBe("application/zip");
   });
 
+  it("accepts Windows zip MIME aliases for issue attachments", async () => {
+    const storage = createStorageService();
+    mockIssueService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      identifier: "PAP-1",
+    });
+    mockIssueService.createAttachment.mockResolvedValue(makeAttachment("application/x-zip-compressed", "ostedin.zip"));
+
+    const app = await createApp(storage);
+    const res = await request(app)
+      .post("/api/companies/company-1/issues/11111111-1111-4111-8111-111111111111/attachments")
+      .attach("file", Buffer.from("zip"), { filename: "ostedin.zip", contentType: "application/x-zip-compressed" });
+
+    expect(res.status).toBe(201);
+    expect(storage.__calls.putFile).toMatchObject({
+      originalFilename: "ostedin.zip",
+      contentType: "application/x-zip-compressed",
+    });
+    expect(res.body.contentType).toBe("application/x-zip-compressed");
+  });
+
   it("accepts default video uploads for issue attachments", async () => {
     const storage = createStorageService();
     mockIssueService.getById.mockResolvedValue({
