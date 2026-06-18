@@ -108,6 +108,20 @@ interface CommentThreadProps {
 }
 
 const DRAFT_DEBOUNCE_MS = 800;
+const COMMENT_ATTACHMENT_ACCEPT = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  ".zip",
+  "application/zip",
+  "application/x-zip",
+  "application/x-zip-compressed",
+].join(",");
+
+function isInlineImageFile(file: File): boolean {
+  return file.type.startsWith("image/");
+}
 
 function loadDraft(draftKey: string): string {
   try {
@@ -925,7 +939,7 @@ export function CommentThread({
     if (!file) return;
     setAttaching(true);
     try {
-      if (imageUploadHandler) {
+      if (imageUploadHandler && isInlineImageFile(file)) {
         const url = await imageUploadHandler(file);
         const safeName = file.name.replace(/[[\]]/g, "\\$&");
         const markdown = `![${safeName}](${url})`;
@@ -1034,7 +1048,7 @@ export function CommentThread({
                 <input
                   ref={attachInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  accept={COMMENT_ATTACHMENT_ACCEPT}
                   className="hidden"
                   onChange={handleAttachFile}
                 />

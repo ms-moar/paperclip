@@ -275,6 +275,72 @@ describe("issue attachment routes", () => {
     expect(res.body.contentType).toBe("application/zip");
   });
 
+  it("accepts Windows zip uploads and stores the canonical zip content type", async () => {
+    const storage = createStorageService();
+    mockIssueService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      identifier: "PAP-1",
+    });
+    mockIssueService.createAttachment.mockResolvedValue(makeAttachment("application/zip", "bundle.zip"));
+
+    const app = await createApp(storage);
+    const res = await request(app)
+      .post("/api/companies/company-1/issues/11111111-1111-4111-8111-111111111111/attachments")
+      .attach("file", Buffer.from("PK\u0003\u0004zip"), { filename: "bundle.zip", contentType: "application/x-zip-compressed" });
+
+    expect(res.status).toBe(201);
+    expect(storage.__calls.putFile).toMatchObject({
+      contentType: "application/zip",
+      originalFilename: "bundle.zip",
+    });
+    expect(mockIssueService.createAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentType: "application/zip",
+        originalFilename: "bundle.zip",
+      }),
+    );
+  });
+
+  it("accepts generic binary zip uploads when the filename and magic bytes identify a zip archive", async () => {
+    const storage = createStorageService();
+    mockIssueService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      identifier: "PAP-1",
+    });
+    mockIssueService.createAttachment.mockResolvedValue(makeAttachment("application/zip", "bundle.zip"));
+
+    const app = await createApp(storage);
+    const res = await request(app)
+      .post("/api/companies/company-1/issues/11111111-1111-4111-8111-111111111111/attachments")
+      .attach("file", Buffer.from("PK\u0003\u0004zip"), { filename: "bundle.zip", contentType: "application/octet-stream" });
+
+    expect(res.status).toBe(201);
+    expect(storage.__calls.putFile).toMatchObject({
+      contentType: "application/zip",
+      originalFilename: "bundle.zip",
+    });
+  });
+
+  it("rejects generic binary .zip uploads when the body is not a zip archive", async () => {
+    const storage = createStorageService();
+    mockIssueService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      identifier: "PAP-1",
+    });
+
+    const app = await createApp(storage);
+    const res = await request(app)
+      .post("/api/companies/company-1/issues/11111111-1111-4111-8111-111111111111/attachments")
+      .attach("file", Buffer.from("not a zip"), { filename: "bundle.zip", contentType: "application/octet-stream" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("Unsupported attachment content type: application/octet-stream");
+    expect(storage.__calls.putFile).toBeUndefined();
+  });
+
   it("accepts default video uploads for issue attachments", async () => {
     const storage = createStorageService();
     mockIssueService.getById.mockResolvedValue({

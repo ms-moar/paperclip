@@ -102,6 +102,7 @@ import {
   isAllowedContentType,
   normalizeIssueAttachmentMaxBytes,
   normalizeContentType,
+  normalizeAttachmentUploadContentType,
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
@@ -7891,7 +7892,11 @@ export function issueRoutes(
       res.status(400).json({ error: "Missing file field 'file'" });
       return;
     }
-    const contentType = normalizeContentType(file.mimetype);
+    const contentType = normalizeAttachmentUploadContentType({
+      contentType: file.mimetype,
+      originalFilename: file.originalname,
+      body: file.buffer,
+    });
     if (file.buffer.length <= 0) {
       res.status(422).json({ error: "Attachment is empty" });
       return;

@@ -267,6 +267,50 @@ describe("CommentThread", () => {
     });
   });
 
+  it("attaches zip files from the composer picker instead of treating them as inline images", async () => {
+    const root = createRoot(container);
+    const imageUploadHandler = vi.fn(async () => "/api/attachments/image/content");
+    const onAttachImage = vi.fn(async () => {});
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <CommentThread
+            comments={[]}
+            onAdd={async () => {}}
+            imageUploadHandler={imageUploadHandler}
+            onAttachImage={onAttachImage}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).not.toBeNull();
+    expect(fileInput?.accept).toContain(".zip");
+    expect(fileInput?.accept).toContain("application/x-zip-compressed");
+
+    const zipFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "bundle.zip", {
+      type: "application/x-zip-compressed",
+    });
+    Object.defineProperty(fileInput, "files", {
+      value: [zipFile],
+      configurable: true,
+    });
+
+    await act(async () => {
+      fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(onAttachImage).toHaveBeenCalledWith(zipFile);
+    expect(imageUploadHandler).not.toHaveBeenCalled();
+    expect((container.querySelector('textarea[aria-label="Comment editor"]') as HTMLTextAreaElement | null)?.value).toBe("");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("renders linked approvals inline in the timeline", () => {
     const root = createRoot(container);
     const agent: Agent = {

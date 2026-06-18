@@ -19,6 +19,21 @@ import {
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "@paperclipai/shared";
 
+export const ZIP_ATTACHMENT_CONTENT_TYPE = "application/zip";
+
+const ZIP_ATTACHMENT_UPLOAD_CONTENT_TYPES = new Set([
+  ZIP_ATTACHMENT_CONTENT_TYPE,
+  "application/x-zip",
+  "application/x-zip-compressed",
+  "multipart/x-zip",
+]);
+
+const GENERIC_BINARY_UPLOAD_CONTENT_TYPES = new Set([
+  "application/octet-stream",
+  "binary/octet-stream",
+  "application/x-binary",
+]);
+
 export const DEFAULT_ALLOWED_TYPES: readonly string[] = [
   "image/png",
   "image/jpeg",
@@ -26,7 +41,10 @@ export const DEFAULT_ALLOWED_TYPES: readonly string[] = [
   "image/webp",
   "image/gif",
   "application/pdf",
-  "application/zip",
+  ZIP_ATTACHMENT_CONTENT_TYPE,
+  "application/x-zip",
+  "application/x-zip-compressed",
+  "multipart/x-zip",
   "text/markdown",
   "text/plain",
   "application/json",
@@ -86,6 +104,36 @@ export function matchesContentType(contentType: string, allowedPatterns: string[
 export function normalizeContentType(contentType: string | null | undefined): string {
   const normalized = (contentType ?? "").trim().toLowerCase();
   return normalized || DEFAULT_ATTACHMENT_CONTENT_TYPE;
+}
+
+function isZipFilename(filename: string | null | undefined): boolean {
+  return (filename ?? "").trim().toLowerCase().endsWith(".zip");
+}
+
+function hasZipArchiveSignature(body: Buffer | Uint8Array | null | undefined): boolean {
+  if (!body || body.length < 4) return false;
+  return body[0] === 0x50 && body[1] === 0x4b && (
+    (body[2] === 0x03 && body[3] === 0x04) ||
+    (body[2] === 0x05 && body[3] === 0x06) ||
+    (body[2] === 0x07 && body[3] === 0x08)
+  );
+}
+
+export function normalizeAttachmentUploadContentType(input: {
+  contentType: string | null | undefined;
+  originalFilename?: string | null;
+  body?: Buffer | Uint8Array | null;
+}): string {
+  const normalized = normalizeContentType(input.contentType);
+  if (ZIP_ATTACHMENT_UPLOAD_CONTENT_TYPES.has(normalized)) return ZIP_ATTACHMENT_CONTENT_TYPE;
+  if (
+    GENERIC_BINARY_UPLOAD_CONTENT_TYPES.has(normalized) &&
+    isZipFilename(input.originalFilename) &&
+    hasZipArchiveSignature(input.body)
+  ) {
+    return ZIP_ATTACHMENT_CONTENT_TYPE;
+  }
+  return normalized;
 }
 
 export function isInlineAttachmentContentType(contentType: string): boolean {

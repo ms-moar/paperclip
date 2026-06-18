@@ -4,6 +4,7 @@ import {
   INLINE_ATTACHMENT_TYPES,
   isInlineAttachmentContentType,
   matchesContentType,
+  normalizeAttachmentUploadContentType,
   normalizeContentType,
   parseAllowedTypes,
 } from "../attachment-types.js";
@@ -97,6 +98,13 @@ describe("matchesContentType", () => {
     expect(matchesContentType("text/plain", patterns)).toBe(true);
     expect(matchesContentType("application/zip", patterns)).toBe(true);
   });
+
+  it("allows common browser zip MIME aliases by default", () => {
+    expect(DEFAULT_ALLOWED_TYPES).toContain("application/zip");
+    expect(DEFAULT_ALLOWED_TYPES).toContain("application/x-zip");
+    expect(DEFAULT_ALLOWED_TYPES).toContain("application/x-zip-compressed");
+    expect(matchesContentType("application/x-zip-compressed", [...DEFAULT_ALLOWED_TYPES])).toBe(true);
+  });
 });
 
 describe("normalizeContentType", () => {
@@ -107,6 +115,26 @@ describe("normalizeContentType", () => {
   it("falls back to octet-stream when the type is missing", () => {
     expect(normalizeContentType(undefined)).toBe("application/octet-stream");
     expect(normalizeContentType("")).toBe("application/octet-stream");
+  });
+});
+
+describe("normalizeAttachmentUploadContentType", () => {
+  it("canonicalizes browser zip MIME aliases", () => {
+    expect(normalizeAttachmentUploadContentType({ contentType: "application/x-zip-compressed" })).toBe("application/zip");
+    expect(normalizeAttachmentUploadContentType({ contentType: "application/x-zip" })).toBe("application/zip");
+  });
+
+  it("infers zip only from generic binary content when filename and magic bytes match", () => {
+    expect(normalizeAttachmentUploadContentType({
+      contentType: "application/octet-stream",
+      originalFilename: "bundle.zip",
+      body: Buffer.from("PK\u0003\u0004zip"),
+    })).toBe("application/zip");
+    expect(normalizeAttachmentUploadContentType({
+      contentType: "application/octet-stream",
+      originalFilename: "bundle.zip",
+      body: Buffer.from("not a zip"),
+    })).toBe("application/octet-stream");
   });
 });
 
