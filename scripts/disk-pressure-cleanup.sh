@@ -50,7 +50,7 @@ apply_delete_files_from_list() {
   fi
   awk '{ $1=""; sub(/^ /, ""); print }' "$list_file" | while IFS= read -r path; do
     [[ -n "$path" ]] || continue
-    rm -f -- "$path"
+    rm -f -- "$path" || log "WARN: failed to remove $path"
   done
 }
 
@@ -99,7 +99,11 @@ cleanup_tmp_targets() {
         [[ -n "$path" ]] || continue
         case "$path" in
           /tmp/win-bootstrap|/tmp/nutra-dynamic-deploy|/tmp/nutra-placeholder-deploy|/tmp/moar-ads-pdroute-clone-*|/tmp/moar-ads-domain-manager-deploy|/tmp/mt-admin-clean-proton-transport|/tmp/jest_rs)
-            rm -rf --one-file-system -- "$path"
+            # Restore owner write across the tree first: deploy staging dirs can
+            # contain read-only subdirs (e.g. win-bootstrap/wmfonts is mode 0500),
+            # which makes unlink fail with EACCES and aborts the whole sweep.
+            chmod -R u+w -- "$path" 2>/dev/null || true
+            rm -rf --one-file-system -- "$path" || log "WARN: failed to remove $path"
             ;;
           *)
             log "SKIP: refused unexpected tmp path $path"
