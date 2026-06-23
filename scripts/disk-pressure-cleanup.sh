@@ -116,7 +116,7 @@ cleanup_tmp_targets() {
 }
 
 log "START: disk pressure cleanup mode=$MODE instance_root=$INSTANCE_ROOT"
-cleanup_old_files "paperclip-backups" "$INSTANCE_ROOT/data/backups" "$BACKUP_RETENTION_DAYS" 'paperclip-*.sql.gz'
+cleanup_old_files "paperclip-backups" "$INSTANCE_ROOT/data/backups" "$BACKUP_RETENTION_DAYS" '*.sql.gz'
 cleanup_old_files "paperclip-run-logs" "$INSTANCE_ROOT/data/run-logs" "$RUN_LOG_RETENTION_DAYS" '*.ndjson'
 cleanup_tmp_targets
 log "DONE: disk pressure cleanup mode=$MODE"

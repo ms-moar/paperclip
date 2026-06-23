@@ -75,10 +75,7 @@ export async function syncPiSkills(
   desiredSkills: string[],
 ): Promise<AdapterSkillSnapshot> {
   const availableEntries = await readPaperclipRuntimeSkillEntries(ctx.config, __moduleDir);
-  const desiredSet = new Set([
-    ...desiredSkills,
-    ...availableEntries.filter((entry) => entry.required).map((entry) => entry.key),
-  ]);
+  const desiredSet = new Set(desiredSkills);
   const skillsHome = resolvePiSkillsHome(ctx.config);
   await fs.mkdir(skillsHome, { recursive: true });
   const installed = await readInstalledSkillTargets(skillsHome);
@@ -103,7 +100,7 @@ export async function syncPiSkills(
 
 export function resolvePiDesiredSkillNames(
   config: Record<string, unknown>,
-  availableEntries: Array<{ key: string; required?: boolean }>,
+  availableEntries: Array<{ key: string }>,
 ) {
   return resolvePaperclipDesiredSkillNames(config, availableEntries);
 }
