@@ -46,11 +46,13 @@ LIB=`/home/ubuntu/arb/.claude/skills/nutra-deploy-lib/scripts`
 - CTA-ссылка на ленд/оффер = **голый макрос Бинома `offer_link`** (НЕ `{landing_url}`/`href="#"`). Заменить ВСЕ.
 - CTA класс `scroll_btn`; `script_preland.js` = клон эталона.
 - Conversion-блок перед `</body>`: парсер `{path_name}`, **2-я конверсия** (`parts[4]`=`ACCT2/LABEL2`) фаерит `gtag conversion` на клик `a.scroll_btn` ПЕРЕД переходом (callback+fallback 1200ms). Преленд НЕ трогает `parts[1]` (это лид на success ленда).
-- `build.php` (GD-реэнкод, PNG→JPEG) → `php build.php` → `index.php` (бандл). У преленда **НЕТ** api/success.
+- `build.php` = **улучшенный** клон `NUTRA/max/prelanding-terra-arthrolix-max-hu-flow406656/build.php` (непрозрачный PNG→JPEG q72 — у преленда большие hero, обычный `black-792/build.php` сохраняет PNG → бандл-гигант). `php build.php` → `index.php` (бандл). У преленда **НЕТ** api/success.
 
 ## 3. Сборка ЛЕНДА (многофайл, форма → api → success)
 
 Идентично **land-redirect Шаг 2** (клон `NUTRA/srj/landing-terra-srj-sk-flow406769`): entry `index.php`, `apiterra<ident>.php` (push + редирект на вайт success), `success1.php`+`success1_white.php`, формы с 11 hidden, click-курл. `path` сегмент `parts[1]`=лид-конверсия на success.
+
+> ⚠️ **Ленд лежит в `/{N}/`, НЕ в корне домена** (Бином-оффер ведёт на `https://<redirect>/<N>/`). Поэтому пути и `action` — **относительные** (НЕ root-абсолютные `/img/`,`/apiterra.php` как в доноре): `src="img/…"`, `action="apiterra<ident>.php?…"`, `script_land`/`tl-validator` — относительно. Иначе ассеты/форма уйдут в корень домена → 404. Прогнать по entry: `grep -oE '(src|href|action)="/' index.php` должно быть пусто (нет ведущего `/`).
 
 ## 4. Деплой (lib)
 
@@ -100,6 +102,8 @@ $LIB/archive.sh --workspace $WS --src <land_dir>    --landid "$LANDNO"   --geo $
 ```
 
 Отчёт: арб/тег; преленд → Бином integrated (landing_id) + offer_link; ленд → редирект `https://<redirect>/<N>/` + оффер (offer_id); success на вайте; first-setup (да/нет); пути архивов. Связка: преленд (integrated, клик offer_link) → оффер 302 → ленд. Сказать всё ли верно.
+
+> ⚠️ **Скил создаёт КУСКИ (landing-преленд + offer-ленд), но НЕ собирает кампанию.** Финальный шаг — арб руками в Бином EU: в кампании назначить **landing = преленд** (`landing_id` из 4c) + **offer = ленд** (`offer_id` из 4d) + прописать `path`/traffic source. Только тогда `offer_link` в преленде резолвится в url ленда и цепочка работает. Явно выдать арбу landing_id + offer_id для этой сборки.
 
 ## Системные правила (НЕ нарушать)
 
