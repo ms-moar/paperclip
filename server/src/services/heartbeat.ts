@@ -3051,6 +3051,14 @@ export async function buildPaperclipWakePayload(input: {
       : [],
     childIssueSummaryTruncated: input.contextSnapshot.childIssueSummaryTruncated === true,
     childAuditDigest,
+    openDescendantSummaries: Array.isArray(input.contextSnapshot.openDescendantSummaries)
+      ? input.contextSnapshot.openDescendantSummaries
+      : [],
+    openDescendantCount: typeof input.contextSnapshot.openDescendantCount === "number"
+      ? input.contextSnapshot.openDescendantCount
+      : 0,
+    openDescendantSummaryTruncated: input.contextSnapshot.openDescendantSummaryTruncated === true,
+    subtreeAuditTruncated: input.contextSnapshot.subtreeAuditTruncated === true,
     livenessContinuation: readNonEmptyString(input.contextSnapshot.livenessContinuationState) ||
       readNonEmptyString(input.contextSnapshot.livenessContinuationInstruction) ||
       readNonEmptyString(input.contextSnapshot.livenessContinuationSourceRunId) ||
