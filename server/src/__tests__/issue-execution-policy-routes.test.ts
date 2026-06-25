@@ -676,6 +676,87 @@ describe("issue execution policy routes", () => {
     });
   });
 
+  it("allows board recovery to reassign an unavailable active review participant without approving", async () => {
+    const unavailableReviewerId = "44444444-4444-4444-8444-444444444444";
+    const replacementReviewerId = "55555555-5555-4555-8555-555555555555";
+    const executorId = "33333333-3333-4333-8333-333333333333";
+    const stageId = "11111111-1111-4111-8111-111111111111";
+    const policy = normalizeIssueExecutionPolicy({
+      stages: [
+        {
+          id: stageId,
+          type: "review",
+          participants: [{ type: "agent", agentId: unavailableReviewerId }],
+        },
+      ],
+    })!;
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_review",
+      assigneeAgentId: unavailableReviewerId,
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-RECOVER",
+      title: "Recover unavailable reviewer",
+      executionPolicy: policy,
+      executionState: {
+        status: "pending",
+        currentStageId: stageId,
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: unavailableReviewerId },
+        returnAssignee: { type: "agent", agentId: executorId },
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: null,
+      },
+      monitorNextCheckAt: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockDbSelectWhere.mockImplementation(() => ({
+      then: (onFulfilled: (rows: unknown[]) => unknown, onRejected?: (reason: unknown) => unknown) =>
+        Promise.resolve([{
+          id: unavailableReviewerId,
+          companyId: "company-1",
+          status: "error",
+          lastHeartbeatAt: new Date("2026-05-01T00:00:00.000Z"),
+        }]).then(onFulfilled, onRejected),
+    }));
+
+    const res = await request(await createApp())
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "in_review", assigneeAgentId: replacementReviewerId });
+
+    expect(res.status).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      expect.objectContaining({
+        status: "in_review",
+        assigneeAgentId: replacementReviewerId,
+        assigneeUserId: null,
+        executionState: expect.objectContaining({
+          status: "pending",
+          currentStageId: stageId,
+          currentStageType: "review",
+          currentParticipant: expect.objectContaining({ type: "agent", agentId: replacementReviewerId }),
+          returnAssignee: expect.objectContaining({ type: "agent", agentId: executorId }),
+          completedStageIds: [],
+          lastDecisionOutcome: null,
+        }),
+      }),
+    );
+    const patch = mockIssueService.update.mock.calls[0]?.[1] as Record<string, unknown>;
+    const nextPolicy = patch.executionPolicy as ReturnType<typeof normalizeIssueExecutionPolicy>;
+    expect(nextPolicy?.stages[0].participants.map((participant) => participant.agentId)).toContain(replacementReviewerId);
+    expect(patch.status).not.toBe("done");
+  });
+
   it("does not auto-start execution review when reviewers are added to an already in_review issue", async () => {
     const policy = normalizeIssueExecutionPolicy({
       stages: [

@@ -598,6 +598,113 @@ describe("issue execution policy transitions", () => {
       // No error — just no patch modifications
       expect(result.patch).toEqual({});
     });
+
+    it("admin recovery can reassign an unavailable active reviewer without approving the stage", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review",
+          assigneeAgentId: qaAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: {
+            status: "pending",
+            currentStageId: reviewStageId,
+            currentStageIndex: 0,
+            currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: qaAgentId },
+            returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: null,
+          },
+        },
+        policy,
+        requestedStatus: "in_review",
+        requestedAssigneePatch: { assigneeAgentId: ctoAgentId },
+        actor: { userId: boardUserId },
+        commentBody: "Recover reviewer handoff; original reviewer unavailable.",
+        allowUnavailableStageParticipantRecovery: true,
+      });
+
+      expect(result.decision).toBeUndefined();
+      expect(result.workflowControlledAssignment).toBeFalsy();
+      expect(result.patch).toMatchObject({
+        status: "in_review",
+        assigneeAgentId: ctoAgentId,
+        assigneeUserId: null,
+        executionState: {
+          status: "pending",
+          currentStageId: reviewStageId,
+          currentStageType: "review",
+          currentParticipant: { type: "agent", agentId: ctoAgentId },
+          returnAssignee: { type: "agent", agentId: coderAgentId },
+          completedStageIds: [],
+          lastDecisionOutcome: null,
+        },
+      });
+      const nextPolicy = result.patch.executionPolicy as IssueExecutionPolicy;
+      expect(nextPolicy.stages[0].participants.map((participant) => participant.agentId)).toContain(ctoAgentId);
+    });
+
+    it("admin recovery cannot assign the review stage back to the producer", () => {
+      expect(() =>
+        applyIssueExecutionPolicyTransition({
+          issue: {
+            status: "in_review",
+            assigneeAgentId: qaAgentId,
+            assigneeUserId: null,
+            executionPolicy: policy,
+            executionState: {
+              status: "pending",
+              currentStageId: reviewStageId,
+              currentStageIndex: 0,
+              currentStageType: "review",
+              currentParticipant: { type: "agent", agentId: qaAgentId },
+              returnAssignee: { type: "agent", agentId: coderAgentId },
+              completedStageIds: [],
+              lastDecisionId: null,
+              lastDecisionOutcome: null,
+            },
+          },
+          policy,
+          requestedStatus: "in_review",
+          requestedAssigneePatch: { assigneeAgentId: coderAgentId },
+          actor: { userId: boardUserId },
+          commentBody: "Recover reviewer handoff to producer.",
+          allowUnavailableStageParticipantRecovery: true,
+        }),
+      ).toThrow("Only the active reviewer or approver can advance");
+    });
+
+    it("admin recovery cannot approve or request changes for the unavailable reviewer", () => {
+      expect(() =>
+        applyIssueExecutionPolicyTransition({
+          issue: {
+            status: "in_review",
+            assigneeAgentId: qaAgentId,
+            assigneeUserId: null,
+            executionPolicy: policy,
+            executionState: {
+              status: "pending",
+              currentStageId: reviewStageId,
+              currentStageIndex: 0,
+              currentStageType: "review",
+              currentParticipant: { type: "agent", agentId: qaAgentId },
+              returnAssignee: { type: "agent", agentId: coderAgentId },
+              completedStageIds: [],
+              lastDecisionId: null,
+              lastDecisionOutcome: null,
+            },
+          },
+          policy,
+          requestedStatus: "done",
+          requestedAssigneePatch: { assigneeAgentId: ctoAgentId },
+          actor: { userId: boardUserId },
+          commentBody: "Recover and approve in one step.",
+          allowUnavailableStageParticipantRecovery: true,
+        }),
+      ).toThrow("Only the active reviewer or approver can advance");
+    });
   });
 
   describe("comment requirements", () => {

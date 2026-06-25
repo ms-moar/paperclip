@@ -50,6 +50,7 @@ type TransitionInput = {
   commentBody?: string | null;
   reviewRequest?: IssueExecutionState["reviewRequest"] | null;
   monitorExplicitlyUpdated?: boolean;
+  allowUnavailableStageParticipantRecovery?: boolean;
 };
 
 type TransitionResult = {
@@ -431,6 +432,42 @@ export function principalsEqual(a: IssueExecutionStagePrincipal | null, b: Issue
   return a.type === "agent" ? a.agentId === b.agentId : a.userId === b.userId;
 }
 
+function stageHasParticipant(stage: IssueExecutionStage, participant: IssueExecutionStagePrincipal | null): boolean {
+  return stage.participants.some((candidate) => principalsEqual(candidate, participant));
+}
+
+function stageWithParticipant(stage: IssueExecutionStage, participant: IssueExecutionStagePrincipal): IssueExecutionStage {
+  if (stageHasParticipant(stage, participant)) return stage;
+  return {
+    ...stage,
+    participants: [
+      ...stage.participants,
+      {
+        id: randomUUID(),
+        type: participant.type,
+        agentId: participant.type === "agent" ? participant.agentId ?? null : null,
+        userId: participant.type === "user" ? participant.userId ?? null : null,
+      },
+    ],
+  };
+}
+
+function policyWithStageParticipant(
+  policy: IssueExecutionPolicy,
+  stage: IssueExecutionStage,
+  participant: IssueExecutionStagePrincipal,
+): { policy: IssueExecutionPolicy; stage: IssueExecutionStage } {
+  const recoveredStage = stageWithParticipant(stage, participant);
+  if (recoveredStage === stage) return { policy, stage };
+  return {
+    policy: {
+      ...policy,
+      stages: policy.stages.map((candidate) => candidate.id === stage.id ? recoveredStage : candidate),
+    },
+    stage: recoveredStage,
+  };
+}
+
 function findStageById(policy: IssueExecutionPolicy, stageId: string | null | undefined) {
   if (!stageId) return null;
   return policy.stages.find((stage) => stage.id === stageId) ?? null;
@@ -456,11 +493,6 @@ function selectStageParticipant(
   }
   const first = participants[0];
   return first ? { type: first.type, agentId: first.agentId ?? null, userId: first.userId ?? null } : null;
-}
-
-function stageHasParticipant(stage: IssueExecutionStage, participant: IssueExecutionStagePrincipal | null): boolean {
-  if (!participant) return false;
-  return stage.participants.some((candidate) => principalsEqual(candidate, participant));
 }
 
 function patchForPrincipal(principal: IssueExecutionStagePrincipal | null) {
@@ -778,6 +810,30 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
       input.issue.status !== "in_review" ||
       !principalsEqual(currentAssignee, currentParticipant) ||
       !principalsEqual(existingState?.currentParticipant ?? null, currentParticipant);
+
+    const canRecoverUnavailableStageParticipant =
+      input.allowUnavailableStageParticipantRecovery === true &&
+      attemptedStageAdvance &&
+      !stageStateDrifted &&
+      (requestedStatus === undefined || requestedStatus === "in_review") &&
+      explicitAssignee !== null &&
+      !principalsEqual(explicitAssignee, currentParticipant) &&
+      !principalsEqual(explicitAssignee, existingState?.returnAssignee ?? null);
+
+    if (canRecoverUnavailableStageParticipant) {
+      const recovered = policyWithStageParticipant(input.policy, activeStage, explicitAssignee);
+      patch.executionPolicy = recovered.policy;
+      buildPendingStagePatch({
+        patch,
+        previous: existingState,
+        policy: recovered.policy,
+        stage: recovered.stage,
+        participant: explicitAssignee,
+        returnAssignee: existingState?.returnAssignee ?? currentAssignee ?? actor,
+        reviewRequest: effectiveReviewRequest,
+      });
+      return { patch };
+    }
 
     if (attemptedStageAdvance && !stageStateDrifted) {
       throw unprocessable("Only the active reviewer or approver can advance the current execution stage");

@@ -60,6 +60,7 @@ import {
   type CompanySearchQuery,
   type CompanySearchResponse,
   type ExecutionWorkspace,
+  type IssueExecutionStagePrincipal,
   type IssueRelationIssueSummary,
   type IssueWatchdogDiscoveryKind,
   type SourceTrustMetadata,
@@ -137,6 +138,7 @@ import {
   applyIssueExecutionPolicyTransition,
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
+  principalsEqual,
   redactIssueMonitorExternalRef,
   setIssueExecutionPolicyMonitorScheduledBy,
 } from "../services/issue-execution-policy.js";
@@ -2012,6 +2014,66 @@ export function issueRoutes(
     });
     if (decision.allowed) return;
     throw forbidden(decision.explanation);
+  }
+
+  const UNAVAILABLE_STAGE_PARTICIPANT_STALE_MS = 24 * 60 * 60 * 1000;
+
+  function requestedAssigneePrincipal(input: {
+    assigneeAgentId?: string | null;
+    assigneeUserId?: string | null;
+  }): IssueExecutionStagePrincipal | null {
+    if (input.assigneeAgentId) return { type: "agent", agentId: input.assigneeAgentId, userId: null };
+    if (input.assigneeUserId) return { type: "user", userId: input.assigneeUserId, agentId: null };
+    return null;
+  }
+
+  function agentParticipantUnavailable(row: { status?: string | null; lastHeartbeatAt?: Date | string | null } | null) {
+    if (!row) return true;
+    if (row.status === "error" || row.status === "paused" || row.status === "terminated") return true;
+    if (!row.lastHeartbeatAt) return true;
+    const lastHeartbeatMs = row.lastHeartbeatAt instanceof Date
+      ? row.lastHeartbeatAt.getTime()
+      : Date.parse(row.lastHeartbeatAt);
+    return Number.isNaN(lastHeartbeatMs) || Date.now() - lastHeartbeatMs > UNAVAILABLE_STAGE_PARTICIPANT_STALE_MS;
+  }
+
+  async function shouldAllowUnavailableStageParticipantRecovery(input: {
+    req: Request;
+    issue: typeof issueRows.$inferSelect;
+    requestedStatus?: string;
+    requestedAssignee: IssueExecutionStagePrincipal | null;
+    assignmentScope: TaskAssignmentAuthorizationScope;
+  }) {
+    if (!input.requestedAssignee) return false;
+    if (input.requestedStatus !== undefined && input.requestedStatus !== "in_review") return false;
+    const state = parseIssueExecutionState(input.issue.executionState);
+    const currentParticipant = state?.status === "pending" ? state.currentParticipant : null;
+    if (!currentParticipant || currentParticipant.type !== "agent" || !currentParticipant.agentId) return false;
+    if (principalsEqual(currentParticipant, input.requestedAssignee)) return false;
+
+    const decision = await access.decide({
+      actor: input.req.actor,
+      action: "tasks:assign",
+      resource: {
+        type: "issue",
+        companyId: input.issue.companyId,
+        issueId: input.assignmentScope.issueId ?? null,
+        projectId: input.assignmentScope.projectId ?? null,
+        parentIssueId: input.assignmentScope.parentIssueId ?? null,
+        assigneeAgentId: input.assignmentScope.assigneeAgentId ?? null,
+        assigneeUserId: input.assignmentScope.assigneeUserId ?? null,
+      },
+      scope: input.assignmentScope,
+    });
+    if (!decision.allowed) return false;
+
+    const currentReviewer = await db
+      .select({ status: agents.status, lastHeartbeatAt: agents.lastHeartbeatAt })
+      .from(agents)
+      .where(and(eq(agents.companyId, input.issue.companyId), eq(agents.id, currentParticipant.agentId)))
+      .then((rows) => rows[0] ?? null);
+
+    return agentParticipantUnavailable(currentReviewer);
   }
 
   async function decideIssueAccess(
@@ -6322,6 +6384,39 @@ export function issueRoutes(
       req.body.executionPolicy !== undefined && monitorChanged,
     );
 
+    const requestedAssigneeForRecovery = requestedAssigneePrincipal({
+      assigneeAgentId: normalizedAssigneeAgentId,
+      assigneeUserId: req.body.assigneeUserId === undefined ? undefined : (req.body.assigneeUserId as string | null),
+    });
+    const recoveryAssignmentScope = requestedAssigneeForRecovery
+      ? {
+        issueId: existing.id,
+        projectId: await resolveAssignmentProjectId({
+          companyId: existing.companyId,
+          projectId: updateFields.projectId === undefined
+            ? existing.projectId
+            : updateFields.projectId as string | null | undefined,
+          parentIssueId: (updateFields.parentId === undefined
+            ? existing.parentId
+            : updateFields.parentId) as string | null | undefined,
+        }),
+        parentIssueId: (updateFields.parentId === undefined
+          ? existing.parentId
+          : updateFields.parentId) as string | null | undefined,
+        assigneeAgentId: requestedAssigneeForRecovery.type === "agent" ? requestedAssigneeForRecovery.agentId ?? null : null,
+        assigneeUserId: requestedAssigneeForRecovery.type === "user" ? requestedAssigneeForRecovery.userId ?? null : null,
+      }
+      : null;
+    const allowUnavailableStageParticipantRecovery = recoveryAssignmentScope
+      ? await shouldAllowUnavailableStageParticipantRecovery({
+        req,
+        issue: existing,
+        requestedStatus: typeof updateFields.status === "string" ? updateFields.status : undefined,
+        requestedAssignee: requestedAssigneeForRecovery,
+        assignmentScope: recoveryAssignmentScope,
+      })
+      : false;
+
     const transition = applyIssueExecutionPolicyTransition({
       issue: existing,
       policy: nextExecutionPolicy,
@@ -6339,6 +6434,7 @@ export function issueRoutes(
       commentBody,
       reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,
       monitorExplicitlyUpdated: req.body.executionPolicy !== undefined && monitorChanged,
+      allowUnavailableStageParticipantRecovery,
     });
     const decisionId = transition.decision ? randomUUID() : null;
     if (decisionId) {
