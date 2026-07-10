@@ -53,24 +53,44 @@ LIB=`/home/ubuntu/arb/.claude/skills/nutra-deploy-lib/scripts`
 
 Verify бандла: `grep -oE "https?://[a-z0-9.-]+" index-bundled.php|sort -u` (только googletagmanager + nutra-курл если nutra; terra→r.nutraleads=0) · `php -l` всех php · форма action = имя api.
 
-### 2b. (опц.) Binom custom event-постбэк — клик/скролл-конверсии
+### 2b. Конверсии — до 3 (покупка + скролл + клик). КАЖДАЯ стреляет в Google Ads (gtag) И в Binom-трекер (пиксель)
 
-Если на ленде есть клик/скролл-конверсии (рулетка, двери, engaged-scroll — как `site-1100/1101`), дублируй сработку **кастомным событием Binom**: img-пиксель садит событие на `upd_clickid` (эндпоинт Binom `/sucsess` — `sucsess` НЕ опечатка).
+Каждая конверсия делает ДВЕ вещи одновременно: `gtag('event','conversion',{send_to:...})` → в Google Ads **и** `binomEvent(n)` (img-пиксель) → в Binom-трекер. Одна не заменяет другую.
 
-```js
-// в conversion-блоке, объявить один раз
-var subid = '{clickid}';
-if (subid && subid.charAt(0) === '{') subid = '';           // макрос не подставлен -> пропустить
-function binomEvent(n){ if(!subid) return; var img=new Image();
-  img.src='https://<TRACKER>/sucsess?upd_clickid='+encodeURIComponent(subid)+'&event'+n+'=1'; }
+**Три конверсии:**
+
+| # | Конверсия | Триггер (оба условия) | gtag send_to | Binom-пиксель | Где живёт |
+| - | --------- | --------------------- | ------------ | ------------- | --------- |
+| 1 | **Покупка / лид** | сабмит формы → api → редирект | `parts[1]` (LABEL1) | — (лид ловит ПП/постбэк) | `success.php` |
+| 2 | **Скролл (engaged)** | **75% скролла AND 40с** на странице | `convs[0]` | `binomEvent(1)` → `event1` | ленд (`index.php`) |
+| 3 | **Клик** | **клик по кнопке AND 20с** (рулетка/двери/переход-на-оффер) | `convs[1]` | `binomEvent(2)` → `event2` | ленд (`index.php`) |
+
+**`{path_name}` в Бином (Path → Name)** — формат, парсер режет по `+`:
+
+```
+AW_ID + LABEL1 + GA4 + TITLE + ACCT2/LABEL2 + ACCT3/LABEL3
 ```
 
-Вызвать `binomEvent(n)` СРАЗУ после `gtag('event','conversion',{send_to:...})`, за тем же флагом «уже фаернуто» (один раз), после прохождения гейтов.
+| Сегмент | Что | Конверсия |
+| ------- | --- | --------- |
+| `parts[0]` = `AW_ID` | Google Ads аккаунт (без `AW-`) | config |
+| `parts[1]` = `LABEL1` | Conversion Label | **#1 покупка** (success.php) |
+| `parts[2]` = `GA4` | `G-XXXX` (опц.) | GA4 config |
+| `parts[3]` = `TITLE` | заголовок (опц., может содержать `/`) | — |
+| `parts[4]` = `ACCT2/LABEL2` | 1-й хвостовой `ACCT/LABEL` | **#2 скролл** (`convs[0]`) |
+| `parts[5]` = `ACCT3/LABEL3` | 2-й хвостовой `ACCT/LABEL` | **#3 клик** (`convs[1]`) |
 
-- `<TRACKER>` = Binom-трекер юзера (**спросить**; пример `b2euro.com`).
-- **Маппинг:** `event1` = скролл/engaged (пассивный gate 40с + 75% скролла), `event2` = клик-конверсия (рулетка/двери/переход-на-оффер). В связке преленд+ленд клик перехода на ленд = `event2` (см. skill `landpair`).
-- ⚠️ Событие включить в кампании Binom (Events → Enable event N), иначе постбэк придёт, но не отобразится.
-- Эталон: `NUTRA/yarik/site-1100-...` (рулетка) / `site-1101-...` (двери).
+Парсер собирает ВСЕ хвостовые сегменты строгого вида `цифры(≥6)/label` **по порядку**: 1-й → скролл(#2), 2-й → клик(#3). Хочешь только 2 конверсии — не пиши `ACCT3/LABEL3` (клик отключится). Только 1 — не пиши оба хвоста.
+
+**Как ставить (КОПИРОВАТЬ БЛОК 1-в-1, НЕ переписывать вручную):**
+
+1. Вставить канонический conversion-блок ПЕРЕД `</body>` ленда:
+   **`/home/ubuntu/arb/NUTRA/conversion-block-3conv.html`** — там уже: Consent Mode v2 (auto-grant), парсер `{path_name}` (Mode A GTM / Mode B AW), оба гейта (40с+75% скролл; клик+20с), оба `gtag('event','conversion',...)` + `binomEvent(1)`/`binomEvent(2)`, capture-phase делегация клика.
+2. Заменить в блоке `b2euro.com` → на Binom-трекер юзера (**спросить**; пример `b2euro.com`).
+3. Селектор клика (#3): по умолчанию `.rulet_button` (рулетка). Для другой кнопки/двери — поменять класс в блоке (`t.closest('.rulet_button')`). Кнопка крутит колесо/открывает — **навигации нет** → `event_callback` не нужен (в отличие от landpair-преленда, где клик = переход, см. skill `landpair`).
+4. **Включить события в кампании Binom** (Events → Enable event 1 / event 2), иначе пиксель придёт, но не отобразится.
+
+Эталон рабочего ленда (рулетка, 3 конверсии): архив-пример в задаче + `NUTRA/yarik/site-1100-...` / `site-1101-...` (двери).
 
 ## 3. Деплой (lib)
 

@@ -45,26 +45,28 @@ LIB=`/home/ubuntu/arb/.claude/skills/nutra-deploy-lib/scripts`
 
 - CTA-ссылка на ленд/оффер = **голый макрос Бинома `offer_link`** (НЕ `{landing_url}`/`href="#"`). Заменить ВСЕ.
 - CTA класс `scroll_btn`; `script_preland.js` = клон эталона.
-- Conversion-блок перед `</body>`: парсер `{path_name}`, **2-я конверсия** (`parts[4]`=`ACCT2/LABEL2`) фаерит `gtag conversion` на клик `a.scroll_btn` ПЕРЕД переходом (callback+fallback 1200ms). Преленд НЕ трогает `parts[1]` (это лид на success ленда).
-- ⏱️ **Dwell-гейт клик-конверсии (клик + время).** 2-я конверсия (`parts[4]` + `event2`) фаерит только при **клике по CTA `a.scroll_btn` AND dwell ≥N сек на преленде** — оба условия. Клик — триггер (обязателен), время — гейт «слать ли конверсию»; клик <N сек → просто переход, без gtag/пикселя (отсекает случайные быстрые клики). Реком. порог **20000 мс (20с)** (srj 6009 / es-flow7001), менять по запросу.
+- **Conversion-блок перед `</body>` — до 3 конверсий, каждая стреляет в Google Ads (gtag) И в Binom-трекер (пиксель).** Вставить канонический блок **`/home/ubuntu/arb/NUTRA/conversion-block-3conv.html`** (Consent Mode + парсер `{path_name}` + оба гейта + оба gtag + `binomEvent`), заменить `b2euro.com` → трекер юзера (**спросить**). Полная спека формата — `land-binom` §2b.
+
+  **3 конверсии в комбо-флоу** (`{path_name}` = `AW_ID+LABEL1+GA4+TITLE+ACCT2/LABEL2+ACCT3/LABEL3`, хвостовые `ACCT/LABEL` по порядку):
+
+  | # | Конверсия | Триггер | gtag | Binom | Где |
+  | - | --------- | ------- | ---- | ----- | --- |
+  | 1 | **Покупка/лид** | сабмит формы | `parts[1]` | — | **на ленде** `success1.php` |
+  | 2 | **Скролл (engaged)** | 75% + 40с | `convs[0]` | `event1` | **на преленде** |
+  | 3 | **Клик-переход преленд→ленд** | клик `a.scroll_btn` + 20с | `convs[1]` | `event2` | **на преленде** |
+
+  Преленд НЕ трогает `parts[1]` (лид на success ленда); success ленда НЕ трогает хвостовые конверсии.
+
+  🔴 **Отличие от land-binom: клик #3 = НАВИГАЦИЯ** (переход на ленд), поэтому нужен `event_callback` + `setTimeout(go,1200)` (в отличие от рулетки land-binom, где клик крутит колесо без перехода). Обработчик `a.scroll_btn`, гейт клик+20с:
   ```js
   var t0 = Date.now(); // при загрузке преленда
-  // в обработчике клика a.scroll_btn:
+  // в обработчике клика a.scroll_btn (один раз, за флагом done):
   if (Date.now() - t0 >= 20000 && typeof window.gtag === 'function') {
-    window.gtag('event','conversion',{ send_to: CONV, event_callback: go });
-    binomEvent(2); setTimeout(go, 1200);
-  } else { go(); } // <20с — переход без конверсии
+    window.gtag('event','conversion',{ send_to: CONV3, event_callback: go });
+    binomEvent(2); setTimeout(go, 1200);   // ~1.2с чтобы пиксель+gtag ушли до перехода
+  } else { go(); }                          // <20с — переход без конверсии
   ```
-- 📡 **Binom custom event-постбэк (поверх gtag-конверсии).** Дублируй сработку кастомным событием Binom — img-пиксель садит событие на `upd_clickid` (эндпоинт Binom `/sucsess` — `sucsess` НЕ опечатка). `<TRACKER>` = Binom-трекер юзера (**спросить**; пример `b2euro.com`). Хелпер в conversion-блоке (один раз):
-  ```js
-  var subid = '{clickid}';
-  if (subid && subid.charAt(0) === '{') subid = ''; // макрос не подставлен -> пиксель пропустить
-  function binomEvent(n){ if(!subid) return; var img=new Image();
-    img.src='https://<TRACKER>/sucsess?upd_clickid='+encodeURIComponent(subid)+'&event'+n+'=1'; }
-  ```
-  **Маппинг:** `event1` = вовлечённая/скролл-конверсия (пассивный gate 40с + скролл), `event2` = **клик-конверсия** (переход преленд→ленд по `a.scroll_btn` / рулетка / двери).
-  🔴 **Связка преленд+ленд: клик по CTA-переходу на ленд шлёт `event2`.** Вызвать `binomEvent(2)` в обработчике клика `a.scroll_btn` СРАЗУ после `gtag('event','conversion',...)`, ПЕРЕД навигацией — существующий `event_callback`+`setTimeout(go,1200)` даёт пикселю ~1.2с уйти. Фаерить только когда gtag-конверсия реально срабатывает (dwell-гейт пройден), один раз (за тем же флагом `done`, что и навигация).
-  ⚠️ Событие включить в кампании Binom (Events → Enable event 1/2), иначе постбэк придёт, но не отобразится. Эталон event1+event2: `NUTRA/yarik/site-1100-...` (рулетка) / `site-1101-...` (двери).
+  ⚠️ Включить события в кампании Binom (Events → Enable event 1 / 2). Эталон: `NUTRA/yarik/site-1100-...` (рулетка) / `site-1101-...` (двери).
 - `build.php` = **улучшенный** клон `NUTRA/max/prelanding-terra-arthrolix-max-hu-flow406656/build.php` (непрозрачный PNG→JPEG q72 — у преленда большие hero, обычный `black-792/build.php` сохраняет PNG → бандл-гигант). `php build.php` → `index.php` (бандл). У преленда **НЕТ** api/success.
 
 ## 3. Сборка ЛЕНДА (многофайл, форма → api → success)
