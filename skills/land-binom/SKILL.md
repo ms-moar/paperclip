@@ -53,6 +53,25 @@ LIB=`/home/ubuntu/arb/.claude/skills/nutra-deploy-lib/scripts`
 
 Verify бандла: `grep -oE "https?://[a-z0-9.-]+" index-bundled.php|sort -u` (только googletagmanager + nutra-курл если nutra; terra→r.nutraleads=0) · `php -l` всех php · форма action = имя api.
 
+### 2b. (опц.) Binom custom event-постбэк — клик/скролл-конверсии
+
+Если на ленде есть клик/скролл-конверсии (рулетка, двери, engaged-scroll — как `site-1100/1101`), дублируй сработку **кастомным событием Binom**: img-пиксель садит событие на `upd_clickid` (эндпоинт Binom `/sucsess` — `sucsess` НЕ опечатка).
+
+```js
+// в conversion-блоке, объявить один раз
+var subid = '{clickid}';
+if (subid && subid.charAt(0) === '{') subid = '';           // макрос не подставлен -> пропустить
+function binomEvent(n){ if(!subid) return; var img=new Image();
+  img.src='https://<TRACKER>/sucsess?upd_clickid='+encodeURIComponent(subid)+'&event'+n+'=1'; }
+```
+
+Вызвать `binomEvent(n)` СРАЗУ после `gtag('event','conversion',{send_to:...})`, за тем же флагом «уже фаернуто» (один раз), после прохождения гейтов.
+
+- `<TRACKER>` = Binom-трекер юзера (**спросить**; пример `b2euro.com`).
+- **Маппинг:** `event1` = скролл/engaged (пассивный gate 40с + 75% скролла), `event2` = клик-конверсия (рулетка/двери/переход-на-оффер). В связке преленд+ленд клик перехода на ленд = `event2` (см. skill `landpair`).
+- ⚠️ Событие включить в кампании Binom (Events → Enable event N), иначе постбэк придёт, но не отобразится.
+- Эталон: `NUTRA/yarik/site-1100-...` (рулетка) / `site-1101-...` (двери).
+
 ## 3. Деплой (lib)
 
 ```bash
@@ -110,3 +129,5 @@ $LIB/archive.sh --workspace $WS --src <site_dir> --landid $LANDNO --geo $GEO \
 - build.php обязан GD-реэнкодить. `block.php`/`page.php` донора не трогать.
 - Бином-заливка идемпотентна по slug; для отката — `binom-delete.sh`.
 - Без эмодзи на ленде; без комментариев в коде ленда (кроме функц-маркеров Consent Mode/phantom).
+- **Consent Mode v2 — ОБЯЗАТЕЛЬНО на ленде** (default denied → gtag.js → update granted): канон-блок в `landOneFile.md` §«Часть 3 — Consent Mode v2». Без него метки отрабатывают неверно.
+- **(1я настройка) Кампания вайта в Бином — Default path:** если кампания ещё не создана — создать с **Default path = landing + offer**: landing = `index.html` со СКОМПИЛИРОВАННЫМ исходником интегрируемого сайта (браузерный View Source, не PHP-шаблон); offer = `https://<white>`. `CAMPAIGN_KEY` оттуда → `page.php`. Детали — `integration-m2-dao/references/binom-config.md`. Константы трекера в `page.php` (EU): `TRACKER_URL_TEMPLATE="https://b2euro.com/sucsess"`, `API_KEY="f6802a221fd481cbe55f51ce2d61dcf8f847ee359ab2bc0a91109252ddc6e02f"` (шаблон `integrations/m2/eur/DAO/page.php` — уже исправлен).

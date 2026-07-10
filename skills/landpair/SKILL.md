@@ -46,6 +46,16 @@ LIB=`/home/ubuntu/arb/.claude/skills/nutra-deploy-lib/scripts`
 - CTA-ссылка на ленд/оффер = **голый макрос Бинома `offer_link`** (НЕ `{landing_url}`/`href="#"`). Заменить ВСЕ.
 - CTA класс `scroll_btn`; `script_preland.js` = клон эталона.
 - Conversion-блок перед `</body>`: парсер `{path_name}`, **2-я конверсия** (`parts[4]`=`ACCT2/LABEL2`) фаерит `gtag conversion` на клик `a.scroll_btn` ПЕРЕД переходом (callback+fallback 1200ms). Преленд НЕ трогает `parts[1]` (это лид на success ленда).
+- 📡 **Binom custom event-постбэк (поверх gtag-конверсии).** Дублируй сработку кастомным событием Binom — img-пиксель садит событие на `upd_clickid` (эндпоинт Binom `/sucsess` — `sucsess` НЕ опечатка). `<TRACKER>` = Binom-трекер юзера (**спросить**; пример `b2euro.com`). Хелпер в conversion-блоке (один раз):
+  ```js
+  var subid = '{clickid}';
+  if (subid && subid.charAt(0) === '{') subid = ''; // макрос не подставлен -> пиксель пропустить
+  function binomEvent(n){ if(!subid) return; var img=new Image();
+    img.src='https://<TRACKER>/sucsess?upd_clickid='+encodeURIComponent(subid)+'&event'+n+'=1'; }
+  ```
+  **Маппинг:** `event1` = вовлечённая/скролл-конверсия (пассивный gate 40с + скролл), `event2` = **клик-конверсия** (переход преленд→ленд по `a.scroll_btn` / рулетка / двери).
+  🔴 **Связка преленд+ленд: клик по CTA-переходу на ленд шлёт `event2`.** Вызвать `binomEvent(2)` в обработчике клика `a.scroll_btn` СРАЗУ после `gtag('event','conversion',...)`, ПЕРЕД навигацией — существующий `event_callback`+`setTimeout(go,1200)` даёт пикселю ~1.2с уйти. Фаерить только когда gtag-конверсия реально срабатывает (dwell-гейт пройден), один раз (за тем же флагом `done`, что и навигация).
+  ⚠️ Событие включить в кампании Binom (Events → Enable event 1/2), иначе постбэк придёт, но не отобразится. Эталон event1+event2: `NUTRA/yarik/site-1100-...` (рулетка) / `site-1101-...` (двери).
 - `build.php` = **улучшенный** клон `NUTRA/max/prelanding-terra-arthrolix-max-hu-flow406656/build.php` (непрозрачный PNG→JPEG q72 — у преленда большие hero, обычный `black-792/build.php` сохраняет PNG → бандл-гигант). `php build.php` → `index.php` (бандл). У преленда **НЕТ** api/success.
 
 ## 3. Сборка ЛЕНДА (многофайл, форма → api → success)
@@ -111,3 +121,5 @@ $LIB/archive.sh --workspace $WS --src <land_dir>    --landid "$LANDNO"   --geo $
 - Преленд: `offer_link` голый (НЕ `{...}`), `scroll_btn`, 2-я конверсия `parts[4]` на клик. Ленд: лид `parts[1]` на success.
 - url оффера — шаблон из `binom-offer.sh`. api-имя уникально. Без эмодзи/комментов в коде.
 - Откат: `binom-delete.sh --lander <id> --slug <slug>` (преленд) + `--offer <id>` (ленд).
+- **Consent Mode v2 — ОБЯЗАТЕЛЬНО на преленде И ленде** (default denied → gtag.js → update granted): преленд — `landOneFile.md` §«Часть 3 — Consent Mode v2»; ленд — `landNotOneFile.md` §Шаг 5. Без него метки отрабатывают неверно.
+- **(1я настройка) Кампания вайта в Бином — Default path:** если ещё не создана — создать с **landing = `index.html` со СКОМПИЛИРОВАННЫМ исходником интегрируемого сайта** (браузерный View Source, не PHP) + **offer = `https://<white>`**. Детали — `integration-m2-dao/references/binom-config.md`. Константы `page.php` (EU): `b2euro.com/sucsess` + `API_KEY=f6802a221...` (шаблон `integrations/m2/eur/DAO/page.php` исправлен). (Это про БАЗОВУЮ кампанию вайта; финальная сборка преленд+ленд в кампании — отдельно, см. примечание выше.)
