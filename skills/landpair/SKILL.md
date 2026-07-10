@@ -46,6 +46,15 @@ LIB=`/home/ubuntu/arb/.claude/skills/nutra-deploy-lib/scripts`
 - CTA-ссылка на ленд/оффер = **голый макрос Бинома `offer_link`** (НЕ `{landing_url}`/`href="#"`). Заменить ВСЕ.
 - CTA класс `scroll_btn`; `script_preland.js` = клон эталона.
 - Conversion-блок перед `</body>`: парсер `{path_name}`, **2-я конверсия** (`parts[4]`=`ACCT2/LABEL2`) фаерит `gtag conversion` на клик `a.scroll_btn` ПЕРЕД переходом (callback+fallback 1200ms). Преленд НЕ трогает `parts[1]` (это лид на success ленда).
+- ⏱️ **Dwell-гейт клик-конверсии (клик + время).** 2-я конверсия (`parts[4]` + `event2`) фаерит только при **клике по CTA `a.scroll_btn` AND dwell ≥N сек на преленде** — оба условия. Клик — триггер (обязателен), время — гейт «слать ли конверсию»; клик <N сек → просто переход, без gtag/пикселя (отсекает случайные быстрые клики). Реком. порог **20000 мс (20с)** (srj 6009 / es-flow7001), менять по запросу.
+  ```js
+  var t0 = Date.now(); // при загрузке преленда
+  // в обработчике клика a.scroll_btn:
+  if (Date.now() - t0 >= 20000 && typeof window.gtag === 'function') {
+    window.gtag('event','conversion',{ send_to: CONV, event_callback: go });
+    binomEvent(2); setTimeout(go, 1200);
+  } else { go(); } // <20с — переход без конверсии
+  ```
 - 📡 **Binom custom event-постбэк (поверх gtag-конверсии).** Дублируй сработку кастомным событием Binom — img-пиксель садит событие на `upd_clickid` (эндпоинт Binom `/sucsess` — `sucsess` НЕ опечатка). `<TRACKER>` = Binom-трекер юзера (**спросить**; пример `b2euro.com`). Хелпер в conversion-блоке (один раз):
   ```js
   var subid = '{clickid}';
