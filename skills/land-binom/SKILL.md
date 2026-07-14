@@ -124,6 +124,9 @@ $LIB/binom-lander.sh --name "$LANDER_NAME" --file <site>/index-bundled.php \
 # → {"landing_id":N,...}
 ```
 
+> 🔴 **Скилл ТОЛЬКО создаёт landing-сущность (отдаёт `landing_id`). В `path` кампании его НЕ ставить.**
+> Нутра-ленд (блек) = **rules-path**, арб цепляет ВРУЧНУЮ в правилах кампании. **Default path трогать ЗАПРЕЩЕНО** — там лежит скомпилированная копия главной вайта (View Source) + offer=`https://<white>` (см. §Системные правила). Нутра-ленд в default path = палево (блек отдаётся боту/модератору Google без клоаки). Выдать арбу только `landing_id`, путь он назначит сам.
+
 **3d. api + success на вайт:**
 
 ```bash
@@ -150,4 +153,5 @@ $LIB/archive.sh --workspace $WS --src <site_dir> --landid $LANDNO --geo $GEO \
 - Бином-заливка идемпотентна по slug; для отката — `binom-delete.sh`.
 - Без эмодзи на ленде; без комментариев в коде ленда (кроме функц-маркеров Consent Mode/phantom).
 - **Consent Mode v2 — ОБЯЗАТЕЛЬНО на ленде** (default denied → gtag.js → update granted): канон-блок в `landOneFile.md` §«Часть 3 — Consent Mode v2». Без него метки отрабатывают неверно.
-- **(1я настройка) Кампания вайта в Бином — Default path:** если кампания ещё не создана — создать с **Default path = landing + offer**: landing = `index.html` со СКОМПИЛИРОВАННЫМ исходником интегрируемого сайта (браузерный View Source, не PHP-шаблон); offer = `https://<white>`. `CAMPAIGN_KEY` оттуда → `page.php`. Детали — `integration-m2-dao/references/binom-config.md`. Константы трекера в `page.php` (EU): `TRACKER_URL_TEMPLATE="https://b2euro.com/sucsess"`, `API_KEY="f6802a221fd481cbe55f51ce2d61dcf8f847ee359ab2bc0a91109252ddc6e02f"` (шаблон `integrations/m2/eur/DAO/page.php` — уже исправлен).
+- 🔴 **Default path кампании вайта = ВСЕГДА скомпилированная копия главной вайта, НИКОГДА нутра-ленд.** Default path неизменно: **landing = `index.html` со СКОМПИЛИРОВАННЫМ исходником вайта** (браузерный View Source, не PHP-шаблон) + **offer = `https://<white>`**. Нутра-ленд (блек) в default path не кладётся — только в **rules-path** (цепляет арб вручную). Правило действует ВСЕГДА, не только при 1й настройке: даже когда заливаешь новый ленд в готовую кампанию — default остаётся белой копией, свежий `landing_id` идёт в rules. Причина: Google-модератор/бот открывает кампанию без клоак-контекста и попадает в default → там обязана быть белая страница, иначе палево блека.
+- **(1я настройка) создание кампании вайта:** если кампании ещё нет — создать с Default path (белая копия + offer) по правилу выше. `CAMPAIGN_KEY` оттуда → `page.php`. Детали — `integration-m2-dao/references/binom-config.md`. Константы трекера в `page.php` (EU): `TRACKER_URL_TEMPLATE="https://b2euro.com/sucsess"`, `API_KEY="f6802a221fd481cbe55f51ce2d61dcf8f847ee359ab2bc0a91109252ddc6e02f"` (шаблон `integrations/m2/eur/DAO/page.php` — уже исправлен).
