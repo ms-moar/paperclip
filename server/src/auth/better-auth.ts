@@ -12,6 +12,7 @@ import {
 } from "@paperclipai/db";
 import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
+import { withHashedSessionToken } from "./hashed-session-token-adapter.js";
 
 export type BetterAuthSessionUser = {
   id: string;
@@ -144,7 +145,7 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
     baseURL: baseUrl,
     secret,
     trustedOrigins,
-    database: drizzleAdapter(db, {
+    database: withHashedSessionToken(drizzleAdapter(db, {
       provider: "pg",
       schema: {
         user: authUsers,
@@ -152,7 +153,7 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
         account: authAccounts,
         verification: authVerifications,
       },
-    }),
+    })),
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
