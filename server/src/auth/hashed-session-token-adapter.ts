@@ -164,6 +164,16 @@ function wrap(base: DBAdapter): DBAdapter {
       if (isHashed(presented)) return 0;
       return base.count({ ...args, where: args.where } as never);
     },
+
+    // Better Auth runs createSession / sign-in writes inside a DB transaction
+    // (core/context runWithTransaction → adapter.transaction(trx => als.run({adapter: trx}))).
+    // The transaction-scoped `trx` becomes the ambient adapter for every call
+    // inside the transaction, so it MUST also be wrapped — otherwise session
+    // inserts bypass hashing and land plaintext. Re-wrap the inner trx.
+    async transaction(cb: (trx: DBAdapter) => Promise<unknown>): Promise<unknown> {
+      if (typeof base.transaction !== "function") return cb(wrapped as DBAdapter);
+      return base.transaction((trx: DBAdapter) => cb(trx ? wrap(trx) : (wrapped as DBAdapter)));
+    },
   };
 
   return wrapped as DBAdapter;

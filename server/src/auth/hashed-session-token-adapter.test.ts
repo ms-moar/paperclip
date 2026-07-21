@@ -186,6 +186,27 @@ describe("withHashedSessionToken", () => {
     expect((store[0].token as string).length).toBe(64);
   });
 
+  it("create INSIDE a transaction still hashes (trx re-wrapped)", async () => {
+    const store: Row[] = [];
+    const adapter = withHashedSessionToken((() => makeFakeAdapter(store)) as never)({} as never);
+    // mimic Better Auth: runWithTransaction → adapter.transaction(trx => trx.create(...))
+    await adapter.transaction(async (trx) => {
+      await (trx as typeof adapter).create({
+        model: "session",
+        data: { token: "in-tx-token", userId: "u6" },
+      });
+    });
+    expect(store.length).toBe(1);
+    expect(store[0].token).not.toBe("in-tx-token");
+    expect((store[0].token as string).length).toBe(64);
+    // and it is findable by the plaintext afterwards (outside tx)
+    const row = await adapter.findOne<{ userId: string }>({
+      model: "session",
+      where: [{ field: "token", value: "in-tx-token" }],
+    });
+    expect(row?.userId).toBe("u6");
+  });
+
   it("sha256 reference sanity (hex len)", () => {
     // sanity guard against accidental length drift
     expect(sha256Hex("x").length).toBe(64);
