@@ -21,10 +21,6 @@ allowed-tools:
 
 # gads-warmup
 
-> ℹ️ Скрипты и references этого скила — единый источник в arb:
-> `/home/ubuntu/arb/.claude/skills/gads-warmup/` (пути в этом SKILL.md уже абсолютные).
-> Монитор-бокс — win-rdp `213.7.220.150`, Mon-lane `:8087` через SSH-туннель (см. Шаг 1.5).
-
 Прогрев чистого Google-аккаунта под нишу **нутра**, чтобы Google начал показывать рекламу
 конкурентов на новостных/тематических сайтах — аккаунт затем используется для **мониторинга
 объявлений конкурентов**. Работает через профили Sphere на десктопе **`monitoring`**.
@@ -53,16 +49,16 @@ allowed-tools:
 ### Шаг 1. Страновой пак (авто-ресерч + кэш)
 
 ```bash
-python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/country_pack.py has <CC>
+python3 scripts/country_pack.py has <CC>
 ```
 
 - `yes` → дальше.
-- `no` → **провести авто-ресерч** по `/home/ubuntu/arb/.claude/skills/gads-warmup/references/research-routine.md`: через WebSearch собрать
+- `no` → **провести авто-ресерч** по `references/research-routine.md`: через WebSearch собрать
   язык, новостные сайты, онлайн-аптеки, тексты cookie-кнопок и поисковые запросы (фаза1/2/3,
   male/female) **на языке страны**, собрать JSON по схеме `packs/SK.json`, сохранить:
   ```bash
-  python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/save_pack.py --file /tmp/pack_<CC>.json --source web-research
-  python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/country_pack.py validate <CC>   # должно быть ok:true
+  python3 scripts/save_pack.py --file /tmp/pack_<CC>.json --source web-research
+  python3 scripts/country_pack.py validate <CC>   # должно быть ok:true
   ```
 
 ### Шаг 1.5. Подключение к монитор-боксу (ОБЯЗАТЕЛЬНО перед dry-run/запуском)
@@ -83,12 +79,12 @@ curl -s -H "Authorization: Bearer $SPHERE_TOKEN" http://127.0.0.1:8087/health | 
 ```
 
 Предусловие бокса: Sphere залогинена в сессии **Mon** (RDP `213.7.220.150:53389`), Local API `:40811`,
-аккаунт с десктопом `monitoring` (это поднимает человек через GUI; wrapper это не лечит). Детали — `/home/ubuntu/arb/.claude/skills/gads-warmup/references/api.md`.
+аккаунт с десктопом `monitoring` (это поднимает человек через GUI; wrapper это не лечит). Детали — `references/api.md`.
 
 ### Шаг 2. Предпросмотр плана дня (dry-run)
 
 ```bash
-python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session "<session>" --country <CC> --gender <g> --dry-run
+python3 scripts/warmup.py --session "<session>" --country <CC> --gender <g> --dry-run
 ```
 
 Покажет: день, фазу, запросы и сайты дня. Покажи это оператору (1-2 строки).
@@ -96,7 +92,7 @@ python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session 
 ### Шаг 3. Запуск прогрева (1 день)
 
 ```bash
-python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session "<session>" --country <CC> --gender <g> [--day N] [--no-ad-click]
+python3 scripts/warmup.py --session "<session>" --country <CC> --gender <g> [--day N] [--no-ad-click]
 ```
 
 Скрипт сам: возьмёт **busy-lock на монитор-десктоп** (см. ниже), подключится к профилю
@@ -118,10 +114,15 @@ python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session 
 ### Шаг 5. Верификация (обязательно)
 
 - **Фаза 1-2:** убедись по `SUMMARY.status=ok` и скриншоту `phaseN_end.png`, что cookie приняты и страницы читались.
-- **Фаза 3:** это и есть проверка цели. Посмотри `result.sponsored_results` / `result.ad_iframes` и
-  **открой скриншоты `news_*.png`** (Read изображения или GLM-vision) — глазами подтверди наличие
-  нутра-баннеров (суставы/потенция/БАД) на новостных сайтах. Cross-origin display-рекламу нельзя
-  посчитать из DOM — финальная проверка визуальная по скриншоту.
+- **Фаза 3:** это и есть проверка цели — теперь с авто-**распознаванием вертикали** (нутра/тизер vs обычная аптека), а не просто «есть реклама». В `run.json`:
+  - `result.verdict` — `{nutra_teaser_detected, confidence (low/medium/high), score, evidence[]}`. Это главный итог фазы 3.
+  - `result.ad_networks` — счётчики тизер-нативных сетей (MGID, Taboola, Outbrain, Adskeeper, RevContent...) vs Google-ad-сетей. **Тизер-сеть на новостном ≠ googlesyndication = нутра/тизер-показ.**
+  - `result.landings` — по каждому клику sponsored: `{vertical: nutra|teaser|pharmacy|suspect|other, score, matched}`.
+  - `result.ad_vision` — GLM-классификация скринов (если задан `ZAI_API_KEY`, см. ниже).
+  - `result.sponsored_results` / `result.ad_iframes` — сырые счётчики (back-compat).
+  - Слои детекта: (1) тизер-сети из DOM, (2) лексикон нутра/тизер по лендингу (из пака `nutra_markers`/`teaser_markers`/`teaser_domains`, allowlist `legit_pharmacy_domains`), (3) GLM-vision по скринам.
+  - **Опц. точный слой 3 (vision):** `export ZAI_API_KEY=<z.ai key>` перед запуском — тогда `ad_vision` классифицирует cross-origin баннеры, которые из DOM не прочитать. Без ключа вердикт опирается на слои 1-2.
+  - Сомнительный вердикт (`confidence: low` при непустых `ad_networks`) → открой `news_*.png` глазами для контроля.
 
 ## Итоговый отчёт (обязателен)
 
@@ -132,7 +133,8 @@ python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session 
    Запросов: ... · сайтов: ... · (фаза3: sponsored=<n>, ad_iframes=<n>, клик=<n>)
    Артефакты: runs/<...>/ (скриншоты + run.json)
    Следующий день: <next_day> — запусти скил снова завтра (state сам сдвинул день)
-   [фаза3] Нутра-реклама на скриншотах: <подтверждено/не видно — рекомендации>
+   [фаза3] Вертикаль рекламы: verdict=<nutra_teaser_detected> (<confidence>), тизер-сети=<...>,
+           лендинги=<nutra/teaser/pharmacy...>, evidence=<...> — <подтверждено нутра-показ / не видно>
 ```
 
 ## Безопасность и ограничения
@@ -143,7 +145,7 @@ python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session 
   `exit 5` + `{"error":"desktop_busy", holder:{...}}` с именем профиля/оператора/временем — **дождись
   завершения и запусти снова**. Лок снимается автоматически (в т.ч. при падении); протухший
   (мёртвый pid или >3ч) перехватывается. dry-run/ресерч (Шаги 1-2) лок НЕ берут. Не держать >5 Chrome.
-- **Батч несколько профилей** — строго последовательно (`/home/ubuntu/arb/.claude/skills/gads-warmup/scripts/run_pt_batch.sh`-паттерн: цикл,
+- **Батч несколько профилей** — строго последовательно (`scripts/run_pt_batch.sh`-паттерн: цикл,
   каждый профиль берёт+снимает лок по очереди), не запускать параллельные процессы.
 - Реальные действия на реальном аккаунте через монитор-десктоп — это outward-facing. Запуск Шага 3
   делается по явному указанию оператора (Шаги 1-2 безопасны: ресерч + dry-run).
@@ -154,8 +156,8 @@ python3 /home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py --session 
 
 ## Ресурсы
 
-- `/home/ubuntu/arb/.claude/skills/gads-warmup/scripts/warmup.py` — драйвер (entrypoint). `/home/ubuntu/arb/.claude/skills/gads-warmup/scripts/lib/` — API-клиент, человекоподобие, фазы.
-- `/home/ubuntu/arb/.claude/skills/gads-warmup/scripts/country_pack.py` · `/home/ubuntu/arb/.claude/skills/gads-warmup/scripts/save_pack.py` · `/home/ubuntu/arb/.claude/skills/gads-warmup/scripts/state.py` — паки и состояние (CLI).
+- `scripts/warmup.py` — драйвер (entrypoint). `scripts/lib/` — API-клиент, человекоподобие, фазы.
+- `scripts/country_pack.py` · `scripts/save_pack.py` · `scripts/state.py` — паки и состояние (CLI).
 - `packs/<CC>.json` — страновые знания (есть сид `SK`). `state/<uuid>.json` — прогресс аккаунта.
-- `/home/ubuntu/arb/.claude/skills/gads-warmup/references/flow.md` — спецификация фаз и логики пола. `/home/ubuntu/arb/.claude/skills/gads-warmup/references/research-routine.md` — как ресёрчить ГЕО.
-- `/home/ubuntu/arb/.claude/skills/gads-warmup/references/api.md` — эндпоинты wrapper'а + факты про монитор-десктоп.
+- `references/flow.md` — спецификация фаз и логики пола. `references/research-routine.md` — как ресёрчить ГЕО.
+- `references/api.md` — эндпоинты wrapper'а + факты про монитор-десктоп.
