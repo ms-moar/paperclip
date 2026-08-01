@@ -68,18 +68,21 @@ python3 scripts/country_pack.py has <CC>
 
 ```bash
 ssh -fN -L 8087:127.0.0.1:8087 winrdp          # winrdp → Administrator@213.7.220.150:52222
-# ensure-up: если Mon-wrapper лежит — поднять его (scheduled-task на боксе запрещён кроме /ru User_17,
-# поэтому персистентность = самолечение здесь). Ничего НЕ убивает, Sphere не трогает.
-LANE=$(curl -s -m6 -H "Authorization: Bearer $SPHERE_TOKEN" http://127.0.0.1:8087/health | jq -r '.lane.rdp_user // "down"')
-if [ "$LANE" != "Mon" ]; then
-  ssh winrdp 'powershell -NoProfile -Command "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=\"cmd.exe /c C:\moar-scripts\start_browser_api_mon.bat\"}"'
-  sleep 10
-fi
-curl -s -H "Authorization: Bearer $SPHERE_TOKEN" http://127.0.0.1:8087/health | jq .lane.rdp_user   # → "Mon"
 ```
 
-Предусловие бокса: Sphere залогинена в сессии **Mon** (RDP `213.7.220.150:53389`), Local API `:40811`,
-аккаунт с десктопом `monitoring` (это поднимает человек через GUI; wrapper это не лечит). Детали — `references/api.md`.
+**Дальше preflight делает сам `warmup.py`** (порт коннект-фиксов из `gsc-add`/`ads-demandgen-create`): перед первым API-вызовом `api.preflight()` → `ensure_wrapper()`:
+
+1. Проверяет health `:8087` **на самом боксе** (`ssh winrdp curl.exe :8087/health`) — не только dev-туннель.
+2. Wrapper лёг → проверяет, **активна ли RDP-сессия Mon** (`query session`); `Disc` → точное действие оператору (без активной консоли Sphere Mon мёртв, код это не лечит).
+3. Wrapper лёг, а bat есть → **сам стартует wrapper-процесс** (`Invoke-CimMethod … start_browser_api_mon.bat`), ждёт 12с, перепроверяет.
+4. Не удалось → `warmup.py` выходит с **кодом 4 `infra_not_ready`** + печатает `diagnostics.actions` (что чинить), а не зацикливается на мёртвом порту.
+
+Раньше «тишина» прогона была потому, что self-heal ссылался на **несуществующий** `start_browser_api_mon.bat`, а код лечил только туннель, не сам wrapper.
+
+**🔧 Разовая операторская настройка бокса (prod, вне авто-фиксов) — создать Mon-lane starter:**
+на win-rdp скопировать `C:\moar-scripts\start_browser_api_mta.bat` → `start_browser_api_mon.bat`, поменять env под Mon-lane (образец ServiceManager-линий, `ads-demandgen-create` §4.W): `SPHERE_API_PORT=40811`, `SPHERE_TARGET_USER=Mon`, `SPHERE_LIFECYCLE_OWNER=service_manager`, `SPHERE_HEALTH_FAILURE_THRESHOLD=99999`, слушать `:8087`. После этого `ensure_wrapper` поднимает Mon-lane сам при каждом запуске.
+
+**Предусловие бокса (операторское, код не лечит):** RDP-сессия **Mon** активна (`213.7.220.150:53389`), Sphere залогинена, Local API `:40811`, поднят десктоп `monitoring`. `SPHERE_TOKEN` — env агента или vault `secret/mt-admin/services/browser-api` (self-heal через vault-relogin уже в `api.py`). Детали — `references/api.md`.
 
 ### Шаг 2. Предпросмотр плана дня (dry-run)
 
@@ -102,7 +105,8 @@ python3 scripts/warmup.py --session "<session>" --country <CC> --gender <g> [--d
 сообщение о занятости другим оператором.
 
 Коды выхода: `0` ок · `3` нет/битый пак (вернись на Шаг 1) · `1` прогрев упал (см. ниже) ·
-`2` аргументы · `5` десктоп занят другим прогревом (см. Безопасность — дождись и повтори).
+`2` аргументы · `4` инфра не готова (Mon-lane wrapper/RDP-консоль — см. `diagnostics.actions`, Шаг 1.5) ·
+`5` десктоп занят другим прогревом (см. Безопасность — дождись и повтори).
 
 ### Шаг 4. При сбое (exit 1)
 
