@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execute } from "@paperclipai/adapter-pi-local/server";
 
 async function writeFakePiCommand(commandPath: string): Promise<void> {
@@ -46,9 +46,19 @@ process.exit(0);
   await fs.chmod(commandPath, 0o755);
 }
 
+// Not os.tmpdir(): /tmp is mounted noexec on some hosts, which makes the
+// stub unspawnable (EACCES). node_modules/.tmp is always gitignored.
+function testRoot(name: string): string {
+  return path.join(
+    fileURLToPath(new URL("../../node_modules/.tmp/", import.meta.url)),
+    `paperclip-pi-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+}
+
 describe("pi_local execute", () => {
   it("fails the run when Pi exhausts automatic retries despite exiting 0", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-execute-"));
+    const root = testRoot("execute");
+    await fs.mkdir(root, { recursive: true });
     const workspace = path.join(root, "workspace");
     const commandPath = path.join(root, "pi");
     await fs.mkdir(workspace, { recursive: true });
@@ -94,7 +104,8 @@ describe("pi_local execute", () => {
   });
 
   it("prepends installed skill bin/ dirs to the spawned Pi child PATH", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-path-"));
+    const root = testRoot("path");
+    await fs.mkdir(root, { recursive: true });
     const workspace = path.join(root, "workspace");
     const commandPath = path.join(root, "pi");
     const skillDir = path.join(root, "skills", "demo-skill");
@@ -153,7 +164,8 @@ describe("pi_local execute", () => {
   });
 
   it("does not expose bin/ dirs from skills that are not injected", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-path-neg-"));
+    const root = testRoot("path-neg");
+    await fs.mkdir(root, { recursive: true });
     const workspace = path.join(root, "workspace");
     const commandPath = path.join(root, "pi");
     const nonInjectedSkillDir = path.join(root, "skills", "not-injected");

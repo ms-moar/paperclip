@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { testEnvironment } from "@paperclipai/adapter-pi-local/server";
 
 async function writeFakePiCommand(binDir: string, mode: "success" | "stale-package"): Promise<void> {
@@ -38,12 +38,18 @@ process.exit(1);
   await fs.chmod(commandPath, 0o755);
 }
 
+// Not os.tmpdir(): /tmp is mounted noexec on some hosts, which makes the
+// stub unspawnable (EACCES). node_modules/.tmp is always gitignored.
+function testRoot(name: string): string {
+  return path.join(
+    fileURLToPath(new URL("../../node_modules/.tmp/", import.meta.url)),
+    `paperclip-pi-local-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+}
+
 describe("pi_local environment diagnostics", () => {
   it("passes a hello probe when model discovery and execution succeed", async () => {
-    const root = path.join(
-      os.tmpdir(),
-      `paperclip-pi-local-probe-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    );
+    const root = testRoot("probe");
     const binDir = path.join(root, "bin");
     const cwd = path.join(root, "workspace");
     await fs.mkdir(binDir, { recursive: true });
@@ -71,10 +77,7 @@ describe("pi_local environment diagnostics", () => {
   });
 
   it("surfaces stale configured package installs with a targeted hint", async () => {
-    const root = path.join(
-      os.tmpdir(),
-      `paperclip-pi-local-stale-package-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    );
+    const root = testRoot("stale-package");
     const binDir = path.join(root, "bin");
     const cwd = path.join(root, "workspace");
     await fs.mkdir(binDir, { recursive: true });
