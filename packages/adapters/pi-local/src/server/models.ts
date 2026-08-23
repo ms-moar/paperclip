@@ -131,9 +131,14 @@ export async function discoverPiModels(input: {
     throw new Error(detail ? `\`pi --list-models\` failed: ${detail}` : "`pi --list-models` failed.");
   }
 
-  // Pi outputs model list to stderr, but fall back to stdout for older versions
-  const output = result.stderr || result.stdout;
-  return sortModels(dedupeModels(parseModelsOutput(output)));
+  // Current pi prints the model table on stdout and diagnostics (e.g. "Warning:
+  // No models match pattern ...") on stderr; older builds printed the table on
+  // stderr. Parse both streams and keep whichever actually yielded rows, so a
+  // single warning line on stderr can no longer mask the real table.
+  const fromStdout = parseModelsOutput(result.stdout);
+  const fromStderr = parseModelsOutput(result.stderr);
+  const parsed = fromStdout.length >= fromStderr.length ? fromStdout : fromStderr;
+  return sortModels(dedupeModels(parsed));
 }
 
 function normalizeEnv(input: unknown): Record<string, string> {
