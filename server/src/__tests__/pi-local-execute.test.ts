@@ -35,7 +35,10 @@ if (process.argv.includes("--list-models")) {
   console.log("google    gemini-3-flash-preview");
   process.exit(0);
 }
-fs.writeFileSync(${JSON.stringify(envDumpPath)}, process.env.PATH || "");
+fs.writeFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify({
+  path: process.env.PATH || "",
+  askBackend: process.env.PI_ASK_BACKEND || "",
+}));
 console.log(JSON.stringify({ type: "agent_start" }));
 console.log(JSON.stringify({ type: "turn_start" }));
 console.log(JSON.stringify({ type: "turn_end", message: { role: "assistant", content: "" }, toolResults: [] }));
@@ -152,10 +155,14 @@ describe("pi_local execute", () => {
         onLog: async () => {},
       });
 
-      const capturedPath = await fs.readFile(envDumpPath, "utf8");
-      const entries = capturedPath.split(path.delimiter);
+      const captured = JSON.parse(await fs.readFile(envDumpPath, "utf8")) as {
+        path: string;
+        askBackend: string;
+      };
+      const entries = captured.path.split(path.delimiter);
       expect(entries[0]).toBe(skillBinDir);
       expect(entries.filter((entry) => entry === skillBinDir)).toHaveLength(1);
+      expect(captured.askBackend).toBe("disabled");
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -211,8 +218,12 @@ describe("pi_local execute", () => {
         onLog: async () => {},
       });
 
-      const capturedPath = await fs.readFile(envDumpPath, "utf8");
-      expect(capturedPath.split(path.delimiter)).not.toContain(nonInjectedBinDir);
+      const captured = JSON.parse(await fs.readFile(envDumpPath, "utf8")) as {
+        path: string;
+        askBackend: string;
+      };
+      expect(captured.path.split(path.delimiter)).not.toContain(nonInjectedBinDir);
+      expect(captured.askBackend).toBe("disabled");
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;

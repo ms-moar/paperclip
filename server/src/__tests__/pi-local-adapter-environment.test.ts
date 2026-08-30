@@ -4,7 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { testEnvironment } from "@paperclipai/adapter-pi-local/server";
 
-async function writeFakePiCommand(binDir: string, mode: "success" | "stale-package"): Promise<void> {
+async function writeFakePiCommand(
+  binDir: string,
+  mode: "success" | "stale-package",
+  envDumpPath?: string,
+): Promise<void> {
   const commandPath = path.join(binDir, "pi");
   const script =
     mode === "success"
@@ -14,6 +18,7 @@ if (process.argv.includes("--list-models")) {
   console.log("openai    gpt-4.1-mini");
   process.exit(0);
 }
+${envDumpPath ? `require("node:fs").writeFileSync(${JSON.stringify(envDumpPath)}, process.env.PI_ASK_BACKEND || "");` : ""}
 console.log(JSON.stringify({ type: "session", version: 3, id: "session-1", timestamp: new Date().toISOString(), cwd: process.cwd() }));
 console.log(JSON.stringify({ type: "agent_start" }));
 console.log(JSON.stringify({ type: "turn_start" }));
@@ -54,7 +59,8 @@ describe("pi_local environment diagnostics", () => {
     const cwd = path.join(root, "workspace");
     await fs.mkdir(binDir, { recursive: true });
     await fs.mkdir(cwd, { recursive: true });
-    await writeFakePiCommand(binDir, "success");
+    const envDumpPath = path.join(root, "ask-backend.txt");
+    await writeFakePiCommand(binDir, "success", envDumpPath);
 
     const result = await testEnvironment({
       companyId: "company-1",
@@ -73,6 +79,7 @@ describe("pi_local environment diagnostics", () => {
     expect(result.status).toBe("pass");
     expect(result.checks.some((check) => check.code === "pi_models_discovered")).toBe(true);
     expect(result.checks.some((check) => check.code === "pi_hello_probe_passed")).toBe(true);
+    expect(await fs.readFile(envDumpPath, "utf8")).toBe("disabled");
     await fs.rm(root, { recursive: true, force: true });
   });
 

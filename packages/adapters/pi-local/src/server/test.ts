@@ -125,6 +125,9 @@ export async function testEnvironment(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
+  // The adapter probe must exercise the same disabled Ask profile as real
+  // Paperclip executions; interactions are the only user-question channel.
+  env.PI_ASK_BACKEND = "disabled";
   const runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...env }));
 
   const cwdInvalid = checks.some((check) => check.code === "pi_cwd_invalid");

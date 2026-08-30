@@ -267,6 +267,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     typeof envConfig.PAPERCLIP_API_KEY === "string" && envConfig.PAPERCLIP_API_KEY.trim().length > 0;
   const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
   env.PAPERCLIP_RUN_ID = runId;
+  // Paperclip decisions use issue-thread interactions, never a terminal/TMX
+  // AskUserQuestion implementation. Make the runtime profile explicit before
+  // Pi loads extension factories.
+  env.PI_ASK_BACKEND = "disabled";
 
   const wakeTaskId =
     (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
