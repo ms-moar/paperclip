@@ -3,7 +3,6 @@ set -euo pipefail
 
 INSTANCE_ROOT="${PAPERCLIP_INSTANCE_ROOT:-/home/ubuntu/.paperclip/instances/default}"
 LOG_FILE="${PAPERCLIP_DISK_CLEANUP_LOG_FILE:-$INSTANCE_ROOT/logs/disk-pressure-cleanup.log}"
-BACKUP_RETENTION_DAYS="${PAPERCLIP_BACKUP_RETENTION_DAYS:-3}"
 RUN_LOG_RETENTION_DAYS="${PAPERCLIP_RUN_LOG_RETENTION_DAYS:-7}"
 TMP_CLEANUP_SCRIPT="${PAPERCLIP_TMP_CLEANUP_SCRIPT:-$(dirname "$0")/tmp_cleanup.py}"
 MODE="${1:---dry-run}"
@@ -124,7 +123,8 @@ PY
 }
 
 log "START: disk pressure cleanup mode=$MODE instance_root=$INSTANCE_ROOT"
-cleanup_old_files "paperclip-backups" "$INSTANCE_ROOT/data/backups" "$BACKUP_RETENTION_DAYS" '*.sql.gz'
+# Database backup lifecycle belongs to Paperclip's backup configuration. This
+# pressure cleanup must never delete preserved/manual archives as a side effect.
 cleanup_old_files "paperclip-run-logs" "$INSTANCE_ROOT/data/run-logs" "$RUN_LOG_RETENTION_DAYS" '*.ndjson'
 cleanup_tmp_targets
 log "DONE: disk pressure cleanup mode=$MODE"
