@@ -5,7 +5,7 @@ INSTANCE_ROOT="${PAPERCLIP_INSTANCE_ROOT:-/home/ubuntu/.paperclip/instances/defa
 LOG_FILE="${PAPERCLIP_DISK_CLEANUP_LOG_FILE:-$INSTANCE_ROOT/logs/disk-pressure-cleanup.log}"
 BACKUP_RETENTION_DAYS="${PAPERCLIP_BACKUP_RETENTION_DAYS:-3}"
 RUN_LOG_RETENTION_DAYS="${PAPERCLIP_RUN_LOG_RETENTION_DAYS:-7}"
-TMP_RETENTION_DAYS="${PAPERCLIP_TMP_RETENTION_DAYS:-2}"
+TMP_CLEANUP_SCRIPT="${PAPERCLIP_TMP_CLEANUP_SCRIPT:-$(dirname "$0")/tmp_cleanup.py}"
 MODE="${1:---dry-run}"
 
 if [[ "$MODE" != "--dry-run" && "$MODE" != "--apply" ]]; then
@@ -73,46 +73,54 @@ cleanup_old_files() {
 }
 
 cleanup_tmp_targets() {
-  local list_file
-  list_file=$(mktemp)
-  find /tmp -maxdepth 1 -mindepth 1 \( \
-    -name 'win-bootstrap' -o \
-    -name 'nutra-dynamic-deploy' -o \
-    -name 'nutra-placeholder-deploy' -o \
-    -name 'moar-ads-pdroute-clone-*' -o \
-    -name 'moar-ads-domain-manager-deploy' -o \
-    -name 'mt-admin-clean-proton-transport' -o \
-    -name 'jest_rs' \
-  \) -mtime "+$TMP_RETENTION_DAYS" -print0 2>/dev/null |
-    while IFS= read -r -d '' path; do
-      size=$(du -sb -- "$path" 2>/dev/null | awk '{print $1}' || printf '0')
-      printf '%s %s\n' "$size" "$path"
-    done | sort -n > "$list_file"
-
-  local count bytes
-  read -r count bytes < <(sum_files < "$list_file")
-  log "$MODE: tmp candidates count=$count bytes=$(bytes_to_human "$bytes") older_than_days=$TMP_RETENTION_DAYS"
-  if [[ "$count" -gt 0 ]]; then
-    cat "$list_file" | while IFS= read -r line; do log "$MODE: tmp candidate $line"; done
-    if [[ "$MODE" == "--apply" ]]; then
-      awk '{ $1=""; sub(/^ /, ""); print }' "$list_file" | while IFS= read -r path; do
-        [[ -n "$path" ]] || continue
-        case "$path" in
-          /tmp/win-bootstrap|/tmp/nutra-dynamic-deploy|/tmp/nutra-placeholder-deploy|/tmp/moar-ads-pdroute-clone-*|/tmp/moar-ads-domain-manager-deploy|/tmp/mt-admin-clean-proton-transport|/tmp/jest_rs)
-            # Restore owner write across the tree first: deploy staging dirs can
-            # contain read-only subdirs (e.g. win-bootstrap/wmfonts is mode 0500),
-            # which makes unlink fail with EACCES and aborts the whole sweep.
-            chmod -R u+w -- "$path" 2>/dev/null || true
-            rm -rf --one-file-system -- "$path" || log "WARN: failed to remove $path"
-            ;;
-          *)
-            log "SKIP: refused unexpected tmp path $path"
-            ;;
-        esac
-      done
-    fi
+  if [[ ! -x "$TMP_CLEANUP_SCRIPT" ]]; then
+    log "ERROR: tmp cleanup helper is not executable: $TMP_CLEANUP_SCRIPT"
+    return 1
   fi
-  rm -f "$list_file"
+
+  local output_file
+  output_file=$(mktemp)
+  if ! "$TMP_CLEANUP_SCRIPT" "$MODE" > "$output_file"; then
+    log "ERROR: guarded tmp cleanup failed"
+    tail -20 "$output_file" | while IFS= read -r line; do log "tmp: $line"; done
+    rm -f "$output_file"
+    return 1
+  fi
+
+  python3 - "$output_file" <<'PY' | while IFS= read -r line; do log "$line"; done
+import json
+import sys
+from collections import Counter
+
+path = sys.argv[1]
+reasons = Counter()
+summary = None
+apply_failures = []
+with open(path, encoding="utf-8") as handle:
+    for raw in handle:
+        row = json.loads(raw)
+        if row["type"] == "inventory":
+            reasons[row["reason"]] += 1
+        elif row["type"] == "apply" and not row["deleted"]:
+            apply_failures.append(row)
+        elif row["type"] == "summary":
+            summary = row
+
+if summary is None:
+    raise SystemExit("tmp cleanup helper emitted no summary")
+print(
+    f"{summary['mode']}: tmp inventory={summary['inventory_count']} "
+    f"eligible={summary['eligible_count']} manifest={summary['manifest_count']} "
+    f"manifest_bytes={summary['manifest_bytes']} caps_refused={summary['caps_refused']} "
+    f"deleted={summary['deleted_count']} deleted_bytes={summary['deleted_bytes']} "
+    f"unknown={summary['unknown_count']} "
+    f"liveness_complete={summary['liveness_complete']}"
+)
+print("tmp retained reasons=" + json.dumps(dict(sorted(reasons.items())), separators=(",", ":")))
+for failure in apply_failures[-20:]:
+    print(f"WARN: tmp apply refused path={failure['path']} reason={failure['reason']}")
+PY
+  rm -f "$output_file"
 }
 
 log "START: disk pressure cleanup mode=$MODE instance_root=$INSTANCE_ROOT"
